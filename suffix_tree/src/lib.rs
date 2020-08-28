@@ -7,6 +7,17 @@ use std::rc::Rc;
 
 type NodeId = usize;
 
+// Enum used for the "characters" in a label
+// where the separator will be a unique one
+// in *any* string, and can thus be used to
+// ensure that the Suffix Tree is finished in
+// a single pass (satisfying the online condition)
+// Todo: Smthing implicit/explicit Suffix Tree?
+enum Test {
+    Byte(u8),
+    Sep, // Unique separator
+}
+
 #[derive(Debug)]
 pub struct SuffixTree {
     raw_string: String,
@@ -29,12 +40,10 @@ pub struct Node {
 
     start: usize,
     end: Rc<Cell<usize>>,
-    path_len: usize,
 }
 
 impl SuffixTree {
     pub fn new(s: &str) -> SuffixTree {
-        let c = find_unique_separator(s);
         init_suffix_tree(s)
     }
 
@@ -73,15 +82,19 @@ impl SuffixTree {
 }
 
 impl Node {
-    pub fn new(id: NodeId, global_end: &Rc<Cell<usize>>) -> Node {
+    pub fn new(
+        id: NodeId,
+        parent: Option<NodeId>,
+        start: usize,
+        global_end: &Rc<Cell<usize>>,
+    ) -> Node {
         Node {
             id,
-            parent: None,
+            parent,
             children: BTreeMap::new(),
             suffix_link: None,
-            start: 0,
+            start,
             end: Rc::clone(global_end),
-            path_len: 0,
         }
     }
 
@@ -118,112 +131,141 @@ impl Node {
     }
 }
 
-fn find_unique_separator(s: &str) -> char {
-    // Todo, this logic...
-    '$'
-}
-
 // Todo: Issues
 // - Unused character used to finish the
 //   Suffix Tree, usually $ in literature.
 fn init_suffix_tree(s: &str) -> SuffixTree {
+    // Todo: Verify this can start at 0, examples start it at -1
     let global_end = Rc::new(Cell::new(0));
-    let mut id = 0;
-    let mut root = Node::new(id, &global_end);
-    id += 1;
+    let root = Node::new(0, None, 0, &global_end);
     let mut nodes = vec![root];
+    let mut suffix_tree = SuffixTree {
+        raw_string: String::from(s),
+        nodes: vec![],
+    };
 
-    {
-        // Various control variables
-        let mut last_new_node: Option<&Node> = None;
-        let mut active_node: NodeId = 0;
-        let mut active_edge = 0;
-        let mut active_length = 0;
-        // let mut active_point: Option<(Box<Node>, char, usize)> = None;
-        let mut remaining_suffix_count = 0;
+    let string_bytes = s.as_bytes();
 
-        for (i, b) in s.bytes().enumerate() {
-            // Update leaf_end and increment remaining suffix
-            global_end.set(i); // Should increment by 1
-            remaining_suffix_count += 1;
+    // Various control variables
+    let mut last_new_node: Option<NodeId>;
+    let mut active_node: NodeId = 0;
+    // 'active_edge' is the index of the actual byte
+    // in 'string_bytes'
+    // string_bytes[active_edge]
+    // would give the current byte
+    let mut active_edge: usize = 0;
+    let mut active_length: usize = 0;
+    let mut remaining_suffix_count: usize = 0;
 
-            // Clear last new node
-            last_new_node = None;
+    for (i, b) in s.bytes().enumerate() {
+        // Update global_end and increment remaining suffix
+        global_end.set(global_end.get() + 1);
+        remaining_suffix_count += 1;
 
-            // Need to create these many suffixes, or short-circuit
-            // them for next byte.
-            while remaining_suffix_count > 0 {
-                // If active length is 0 then it's always from root
-                if active_length == 0 {
-                    // Check if next byte already exists from root
-                    if nodes[active_node].has_child(&b) {
-                        // It exists, so just update edge and length
-                        active_edge = b;
-                        active_length += 1;
-                        break;
-                    } else {
-                        // It does not exist yet, so we create it
-                        let mut new_node = Node::new(id, &global_end);
-                        id += 1;
-                        new_node.parent = Some(nodes[active_node].id);
-                        new_node.start = i;
-                        nodes[active_node].children.insert(b, new_node.id); // active_node is root
-                        nodes.push(new_node);
+        // Clear last new node
+        last_new_node = None;
 
-                        // And update remaining_suffix_count since
-                        // a node was created
-                        remaining_suffix_count -= 1;
-                    }
+        // Need to create these many suffixes, or short-circuit
+        // them for next byte.
+        while remaining_suffix_count > 0 {
+            // If active length is 0 then it's always from root
+            if active_length == 0 {
+                // Check if next byte already exists from root
+                if let Some(node) = nodes[active_node].child(&b) {
+                    // It exists, so just update edge and length
+                    // Rule 3 extension
+                    active_edge = nodes[*node].start;
+                    active_length += 1;
+                    break;
                 } else {
-                    // Active length not 0, so traversing somewhere at the moment
-                    // Check if next character is the same
-                    nodes[active_node].child(active_edge)
+                    // It does not exist yet, so we create it
+                    // Rule 2 extension
+                    let new_node =
+                        Node::new(nodes.len(), Some(nodes[active_node].id), i, &global_end);
+                    // active_node is root in this case
+                    nodes[active_node].children.insert(b, new_node.id);
+                    nodes.push(new_node);
+
+                    // And update remaining_suffix_count since
+                    // a node was created
+                    remaining_suffix_count -= 1;
+                }
+            } else {
+                // Active length not 0, so traversing somewhere at the moment
+                // Check if next character is the same
+                let next_byte: u8;
+
+                let n = *nodes[active_node]
+                    .child(&string_bytes[active_edge])
+                    .unwrap();
+                let node = &nodes[n];
+                let mut label = suffix_tree.label_of_node(node);
+                // If the active_length is greater than the label,
+                // then the next character might exist in a child
+                // of the node
+                if active_length > label.len() {
+                    if let Some(child_node) = node.child(&string_bytes[active_edge]) {
+                        label = suffix_tree.label_of_node(&nodes[*child_node]);
+                        // Because we did an internal jump, the active point
+                        // has to be updated
+                        active_node = *child_node;
+                        active_edge = nodes[*child_node].start;
+                        active_length = 0;
+                    }
+                }
+                next_byte = label[active_length];
+                if next_byte == b {
+                    // Next byte match, so continue along the edge (skip to next)
+                    // Also known as a Rule 3 extension
+                    active_length += 1;
+                    break;
+                } else {
+                    // Does not match, have to create a new internal node
+                    // Rule 2 extension
+                    // - Creates new internal node, splitting up the path
+                    // - Decrements active_length by 1
+                    // - Increments active_edge by 1
+
+                    let nodes_len = nodes.len();
+                    let root_id = nodes[0].id;
+
+                    // Have to override n and node here in order to
+                    // not mess with rust's borrowing rules...
+                    // Todo: There might be a better way?
+                    let n = *nodes[active_node]
+                        .child(&string_bytes[active_edge])
+                        .unwrap();
+                    let node = &mut nodes[n];
+                    let new_node = Node::new(nodes_len, Some(node.id), active_length, &global_end);
+                    let new_node2 = Node::new(nodes_len + 1, Some(node.id), i, &global_end);
+                    let node_to_update_id = node.id;
+                    node.end = Rc::new(Cell::new(active_length - 1));
+                    node.children
+                        .insert(string_bytes[new_node.start], new_node.id);
+                    node.children
+                        .insert(string_bytes[new_node2.start], new_node2.id);
+                    // Set suffix links. The new node is set to root, and
+                    // last_new_node (if exists) is set to the new node.
+                    node.suffix_link = Some(root_id);
+                    if let Some(last_new_node_id) = last_new_node {
+                        nodes[last_new_node_id].suffix_link = Some(node_to_update_id);
+                    }
+                    nodes.push(new_node);
+                    nodes.push(new_node2);
+
+                    // Rule 2 extension rules
+                    remaining_suffix_count -= 1;
+                    active_length -= 1;
+                    active_edge += 1;
+                    // active_node as well?
+                    last_new_node = Some(node_to_update_id);
                 }
             }
-
-            // Check if next char already exists from current active node
-
-            //
         }
-
-        // for i in 0..size {
-        //   // Extension rule 1, all nodes' end are
-        //   // updated since they contain a reference
-        //   // to leaf_end
-        //   leaf_end = i;
-
-        //   remaining_suffix_count++;
-
-        //   // New phase, no new nodes are to be considered
-        //   last_new_node = None;
-
-        //   while remaining_suffix_count > 0 {
-
-        //   }
-        // }
     }
 
-    // Fix dangling references to end in O(n) time
-    // let mut nodes = vec![&mut root];
-    // while let Some(n) = nodes.pop() {
-    //     match n.tmp_end {
-    //         Some(i) => {
-    //             n.end = *i.borrow();
-    //             n.tmp_end = None;
-    //         }
-    //         _ => {
-    //             panic!("Tmp_end did not have a value!");
-    //         }
-    //     }
-    //     let mut children = n.children.values_mut().collect();
-    //     nodes.append(&mut children);
-    // }
-
-    SuffixTree {
-        raw_string: String::from(s),
-        // root: Box::new(root),
-        nodes,
-    }
+    suffix_tree.nodes = nodes;
+    suffix_tree
 }
 
 // fn find_longest_substring(tree: &SuffixTree, bytes: &[u8]) -> (usize, usize) {
@@ -289,7 +331,9 @@ mod tests {
 
     #[test]
     fn basic() {
-        SuffixTree::new("banana");
+        let st = SuffixTree::new("banaxna");
+        println!("{:?}", st.raw_string.as_bytes());
+        println!("{:?}", st);
     }
 
     // #[test]

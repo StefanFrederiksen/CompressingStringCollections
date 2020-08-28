@@ -1,7 +1,7 @@
 // mod lz77;
-// use suffix_tree::SuffixTree;
 use std::cell::Cell;
 use std::rc::Rc;
+use suffix_tree::SuffixTree;
 
 #[derive(Debug)]
 struct Node {
@@ -28,6 +28,14 @@ fn main() {
     //     queue.append(&mut children);
     // }
 
+    // testing_mutable_referencing();
+
+    let st = SuffixTree::new("xyzxyaxyz");
+    println!("{:?}", st.string().as_bytes());
+    println!("{:?}", st);
+}
+
+fn testing_mutable_referencing() -> () {
     let global_end = Rc::new(Cell::new(0));
     let n = Node {
         start: 0,
@@ -38,10 +46,18 @@ fn main() {
     for i in 0..10 {
         global_end.set(global_end.get() + 1);
 
-        let new_node = Node {
-            start: i,
-            end: Rc::clone(&global_end),
-        };
+        let new_node: Node;
+        if i % 2 == 0 {
+            new_node = Node {
+                start: i,
+                end: Rc::clone(&global_end),
+            };
+        } else {
+            new_node = Node {
+                start: i,
+                end: Rc::new(Cell::new(i)),
+            };
+        }
         nodes.push(new_node);
         println!("{:?}", nodes.last().unwrap().end);
     }
