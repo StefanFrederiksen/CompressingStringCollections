@@ -1,8 +1,12 @@
-// #![allow(dead_code, unused_mut, unused_assignments, unused_variables)] // While writing
+// #![allow(unused_variables)]
 
-// Some inspiration taken from https://github.com/BurntSushi/suffix
+// Some inspiration for structure taken from https://github.com/BurntSushi/suffix
+// However for the actual creation of the Suffix Tree, inspiration was taken from
+// https://github.com/mission-peace/interview/blob/master/src/com/interview/suffixprefix/SuffixTree.java
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::fmt;
+use std::iter;
 use std::rc::Rc;
 
 type NodeId = usize;
@@ -18,11 +22,10 @@ enum Test {
     Sep, // Unique separator
 }
 
-#[derive(Debug)]
+// #[derive(Debug)]
 pub struct SuffixTree {
     raw_string: String,
     nodes: Vec<Node>,
-    // root: Box<Node<'s>>,
 }
 
 #[derive(Debug)]
@@ -53,8 +56,6 @@ impl SuffixTree {
 
     // Gets the byte label going into the node
     pub fn label_of_node(&self, node: &Node) -> &[u8] {
-        // Need to evaluate tactic to handle this...
-        // Options: panic (as is), Result<>, or format
         &self.raw_string.as_bytes()[node.start as usize..node.end.get()]
     }
 
@@ -122,6 +123,13 @@ impl Node {
     //     cur
     // }
 
+    pub fn is_root(&self) -> bool {
+        match self.parent {
+            None => true,
+            Some(_) => false,
+        }
+    }
+
     pub fn start(&self) -> usize {
         self.start
     }
@@ -129,13 +137,38 @@ impl Node {
     pub fn end(&self) -> usize {
         self.end.get()
     }
+
+    pub fn length(&self) -> usize {
+        self.end.get() - self.start
+    }
+}
+
+impl fmt::Debug for SuffixTree {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        fn fmt(f: &mut fmt::Formatter, st: &SuffixTree, node: &Node, depth: usize) -> fmt::Result {
+            let indent: String = iter::repeat(' ').take(depth * 2).collect();
+            if node.is_root() {
+                writeln!(f, "ROOT");
+            } else {
+                writeln!(f, "{}{:?}", indent, &st.label_of_node_formatted(node));
+            }
+            for child in node.children().values() {
+                fmt(f, st, &st.nodes[*child], depth + 1)?;
+            }
+            Ok(())
+        }
+        writeln!(f, "\n-----------------------------------------");
+        writeln!(f, "SUFFIX TREE");
+        writeln!(f, "text: {}", self.raw_string);
+        fmt(f, self, self.root(), 0)?;
+        writeln!(f, "-----------------------------------------")
+    }
 }
 
 // Todo: Issues
 // - Unused character used to finish the
 //   Suffix Tree, usually $ in literature.
 fn init_suffix_tree(s: &str) -> SuffixTree {
-    // Todo: Verify this can start at 0, examples start it at -1
     let global_end = Rc::new(Cell::new(0));
     let root = Node::new(0, None, 0, &global_end);
     let mut nodes = vec![root];
@@ -150,8 +183,7 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
     let mut last_new_node: Option<NodeId>;
     let mut active_node: NodeId = 0;
     // 'active_edge' is the index of the actual byte
-    // in 'string_bytes'
-    // string_bytes[active_edge]
+    // in 'string_bytes'. string_bytes[active_edge]
     // would give the current byte
     let mut active_edge: usize = 0;
     let mut active_length: usize = 0;
@@ -193,28 +225,98 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
             } else {
                 // Active length not 0, so traversing somewhere at the moment
                 // Check if next character is the same
-                let next_byte: u8;
+                let mut next_byte: Option<u8> = None;
 
-                let n = *nodes[active_node]
-                    .child(&string_bytes[active_edge])
-                    .unwrap();
-                let node = &nodes[n];
-                let mut label = suffix_tree.label_of_node(node);
-                // If the active_length is greater than the label,
-                // then the next character might exist in a child
-                // of the node
-                if active_length > label.len() {
-                    if let Some(child_node) = node.child(&string_bytes[active_edge]) {
-                        label = suffix_tree.label_of_node(&nodes[*child_node]);
-                        // Because we did an internal jump, the active point
-                        // has to be updated
-                        active_node = *child_node;
-                        active_edge = nodes[*child_node].start;
-                        active_length = 0;
+                // Getting the next character is non-trivial.
+                // It could be that it is on the label for the
+                // 'node' which is the easy one (1), but it could
+                // also be the case that it is a child of 'node'
+                // that continues the label, so would have to
+                // iterate until we find the correct node (3), or
+                // until we find that it should be created. There
+                // is one additional case however if the next char
+                // should be created at the beginning of one of the
+                // children (2).
+                // Can check for (1) by the difference in end and
+                // start being greater than active_length
+                // Can check for (2) by the active_length being +1
+                // greater than the diff.
+                // (3) is more tricky however, as a new child node
+                // needs to be created and short-circuited.
+                let mut found_next_character = false;
+                loop {
+                    let n = *nodes[active_node]
+                        .child(&string_bytes[active_edge])
+                        .unwrap();
+                    let node = &nodes[n];
+
+                    if node.length() > active_length {
+                        // (1)
+                        next_byte = Some(suffix_tree.label_of_node(node)[active_length]);
+                        found_next_character = true;
+                        break;
+                    // Todo: Find cases where this can actually happen
+                    } else if node.length() == active_length {
+                        // (2)
+                        // Check for child node
+                        if node.has_child(&string_bytes[active_edge]) {
+                            next_byte = Some(string_bytes[active_edge]);
+                            found_next_character = true;
+                            break;
+                        } else {
+                            // (3)
+                            // Special case, need to short-circuit
+                            // after creating new leaf node
+
+                            // Hacky rust.. Probably need to figure out how
+                            // to circumvent this... But need to override n
+                            // and node to free up nodes variable so we can
+                            // mutate it
+                            let node_id = node.id;
+                            let node = 0;
+                            let n = 0;
+                            let new_node = Node::new(nodes.len(), Some(node_id), i, &global_end);
+                            nodes[node_id]
+                                .children
+                                .insert(string_bytes[active_edge], new_node.id);
+                            nodes.push(new_node);
+                            if let Some(last_new_node_id) = last_new_node {
+                                nodes[last_new_node_id].suffix_link = Some(node_id);
+                            }
+                            last_new_node = Some(node_id);
+
+                            // If active node is not root, then follow
+                            if active_node != 0 {
+                                active_node = nodes[node_id].suffix_link.unwrap();
+                            } else {
+                                // Otherwise update active_edge and length
+                                active_edge += 1;
+                                active_length -= 1;
+                            }
+
+                            remaining_suffix_count -= 1;
+                            break;
+                        }
+                    }
+                    // Active_length is larger than label, so have to
+                    // traverse children Just done by updating active
+                    // point and repeating loop.
+                    else {
+                        // Update active point
+                        active_node = *node.child(&string_bytes[active_edge]).unwrap();
+                        active_length = active_length - node.length() - 1;
+                        active_edge = active_edge + node.length() + 1;
                     }
                 }
-                next_byte = label[active_length];
-                if next_byte == b {
+
+                // Short-circuit loop if there was no next character
+                // and a new node was created
+                // Todo: verify?
+                if !found_next_character {
+                    break;
+                }
+
+                if next_byte.unwrap() == b {
                     // Next byte match, so continue along the edge (skip to next)
                     // Also known as a Rule 3 extension
                     active_length += 1;
@@ -232,14 +334,21 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
                     // Have to override n and node here in order to
                     // not mess with rust's borrowing rules...
                     // Todo: There might be a better way?
+                    let _tmp_node = &nodes[active_node];
                     let n = *nodes[active_node]
                         .child(&string_bytes[active_edge])
                         .unwrap();
+
                     let node = &mut nodes[n];
-                    let new_node = Node::new(nodes_len, Some(node.id), active_length, &global_end);
+                    let new_node = Node::new(
+                        nodes_len,
+                        Some(node.id),
+                        node.start + active_length,
+                        &global_end,
+                    );
                     let new_node2 = Node::new(nodes_len + 1, Some(node.id), i, &global_end);
                     let node_to_update_id = node.id;
-                    node.end = Rc::new(Cell::new(active_length - 1));
+                    node.end = Rc::new(Cell::new(node.start + active_length));
                     node.children
                         .insert(string_bytes[new_node.start], new_node.id);
                     node.children
@@ -253,11 +362,15 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
                     nodes.push(new_node);
                     nodes.push(new_node2);
 
-                    // Rule 2 extension rules
                     remaining_suffix_count -= 1;
-                    active_length -= 1;
-                    active_edge += 1;
-                    // active_node as well?
+                    // Rule 2 extension rules
+                    if active_node == root_id {
+                        active_length -= 1;
+                        active_edge += 1;
+                    } else {
+                        // Set active node to the suffix_link (always exists on non-root)
+                        active_node = nodes[node_to_update_id].suffix_link.unwrap();
+                    }
                     last_new_node = Some(node_to_update_id);
                 }
             }
@@ -331,7 +444,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        let st = SuffixTree::new("banaxna");
+        let st = SuffixTree::new("banana$");
         println!("{:?}", st.raw_string.as_bytes());
         println!("{:?}", st);
     }

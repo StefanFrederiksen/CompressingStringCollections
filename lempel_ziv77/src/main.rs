@@ -30,7 +30,8 @@ fn main() {
 
     // testing_mutable_referencing();
 
-    let st = SuffixTree::new("xyzxyaxyz");
+    let st = SuffixTree::new("banana");
+    // let st = SuffixTree::new("xyzxyaxyz$");
     println!("{:?}", st.string().as_bytes());
     println!("{:?}", st);
 }
