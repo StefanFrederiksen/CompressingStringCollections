@@ -4,28 +4,82 @@
 // However for the actual creation of the Suffix Tree, inspiration was taken from
 // https://github.com/mission-peace/interview/blob/master/src/com/interview/suffixprefix/SuffixTree.java
 use std::cell::Cell;
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::iter;
 use std::rc::Rc;
 
 type NodeId = usize;
+type Tree = BTreeMap<LabelData, NodeId>;
 
 // Enum used for the "characters" in a label
 // where the separator will be a unique one
-// in *any* string, and can thus be used to
+// in *any* string, since it cannot exist from
+// the string itself and can thus be used to
 // ensure that the Suffix Tree is finished in
 // a single pass (satisfying the online condition)
-// Todo: Smthing implicit/explicit Suffix Tree?
-enum Test {
+// and converted from an implicit to an explicit
+// suffix tree.
+#[derive(Copy, Clone)]
+pub enum LabelData {
     Byte(u8),
-    Sep, // Unique separator
+    Sep,
+}
+
+// The separator as printed in output
+static SEP: &'static str = "<$>";
+impl LabelData {
+    fn as_readable(&self) -> Vec<u8> {
+        match self {
+            Self::Byte(b) => vec![*b],
+            Self::Sep => SEP.as_bytes().to_vec(),
+        }
+    }
+}
+
+impl PartialEq for LabelData {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Byte(b1), Self::Byte(b2)) => b1 == b2,
+            (Self::Sep, Self::Sep) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for LabelData {}
+
+impl Ord for LabelData {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            // The separator is "first" in the ordering, otherwise
+            // the byte values are just compared to each other
+            (Self::Byte(b1), Self::Byte(b2)) => b1.cmp(b2),
+            (Self::Sep, Self::Sep) => Ordering::Equal,
+            (Self::Byte(_), Self::Sep) => Ordering::Less,
+            (Self::Sep, Self::Byte(_)) => Ordering::Greater,
+        }
+    }
+}
+
+impl PartialOrd for LabelData {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl fmt::Debug for LabelData {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        writeln!(f, "LabelData: {:?}", &self.as_readable())
+    }
 }
 
 // #[derive(Debug)]
 pub struct SuffixTree {
     raw_string: String,
     nodes: Vec<Node>,
+    string: Vec<LabelData>,
 }
 
 #[derive(Debug)]
@@ -38,7 +92,7 @@ pub struct Node {
     // Initial guess is that it would be pretty bad in
     // nodes with a large amount of children, but VERY
     // fast in a node with a limited amount of children
-    children: BTreeMap<u8, NodeId>,
+    children: Tree,
     suffix_link: Option<NodeId>,
 
     start: usize,
@@ -55,15 +109,32 @@ impl SuffixTree {
     }
 
     // Gets the byte label going into the node
-    pub fn label_of_node(&self, node: &Node) -> &[u8] {
-        &self.raw_string.as_bytes()[node.start as usize..node.end.get()]
+    pub fn label_of_node(&self, node: &Node) -> &[LabelData] {
+        // &self.raw_string.as_bytes()[node.start as usize..node.end.get()]
+        &self.string[node.start as usize..node.end.get()]
     }
 
     pub fn label_of_node_formatted(&self, node: &Node) -> String {
-        let bytes = self.label_of_node(node);
-        match String::from_utf8(bytes.to_vec()) {
+        // I should probably find a cleaner
+        // way to do this...
+        let label_data = self
+            .label_of_node(node)
+            .into_iter()
+            .map(|l| l.as_readable())
+            .fold(vec![], |mut acc, ls| {
+                let mut v = ls.to_vec();
+                acc.append(&mut v);
+                acc
+            });
+
+        // Todo: Also need to find out if this can be avoided
+        // because I need the label_data in from the from_utf8
+        // function (takes ownership) and the Err case...
+        let label_data_copy = label_data.clone();
+
+        match String::from_utf8(label_data) {
             Ok(s) => s,
-            Err(_) => format!("{:?}", bytes),
+            Err(_) => format!("{:?}", label_data_copy),
         }
     }
 
@@ -99,15 +170,15 @@ impl Node {
         }
     }
 
-    pub fn has_child(&self, b: &u8) -> bool {
+    pub fn has_child(&self, b: &LabelData) -> bool {
         self.children.contains_key(b)
     }
 
-    pub fn child(&self, b: &u8) -> Option<&NodeId> {
+    pub fn child(&self, b: &LabelData) -> Option<&NodeId> {
         self.children.get(b)
     }
 
-    pub fn children(&self) -> &BTreeMap<u8, NodeId> {
+    pub fn children(&self) -> &Tree {
         &self.children
     }
 
@@ -148,48 +219,69 @@ impl fmt::Debug for SuffixTree {
         fn fmt(f: &mut fmt::Formatter, st: &SuffixTree, node: &Node, depth: usize) -> fmt::Result {
             let indent: String = iter::repeat(' ').take(depth * 2).collect();
             if node.is_root() {
-                writeln!(f, "ROOT");
+                writeln!(f, "ROOT")?;
             } else {
-                writeln!(f, "{}{:?}", indent, &st.label_of_node_formatted(node));
+                writeln!(f, "{}{:?}", indent, &st.label_of_node_formatted(node))?;
             }
             for child in node.children().values() {
                 fmt(f, st, &st.nodes[*child], depth + 1)?;
             }
             Ok(())
         }
-        writeln!(f, "\n-----------------------------------------");
-        writeln!(f, "SUFFIX TREE");
-        writeln!(f, "text: {}", self.raw_string);
+        writeln!(f, "\n-----------------------------------------")?;
+        writeln!(f, "SUFFIX TREE")?;
+        writeln!(f, "text: {}", self.raw_string)?;
         fmt(f, self, self.root(), 0)?;
         writeln!(f, "-----------------------------------------")
     }
 }
 
-// Todo: Issues
-// - Unused character used to finish the
-//   Suffix Tree, usually $ in literature.
 fn init_suffix_tree(s: &str) -> SuffixTree {
+    // Mutable global end, only possible via
+    // the Cell container.
     let global_end = Rc::new(Cell::new(0));
+    // Root always has id 0, no parent, start is 0 and
+    // a reference to the global end
     let root = Node::new(0, None, 0, &global_end);
+    // The nodes vector contains all of the nodes,
+    // where they just have the Id's of the referenced
+    // nodes in accordance to this list.
     let mut nodes = vec![root];
+
+    // Transforms the input string into a list of
+    // bytes, wrapped into the LabelData enum
+    // and lastly appends the separator at the
+    // end of this list. This ensures a unique
+    // last byte to finish up the suffix tree.
+    let mut bytes_and_sep_st = s
+        .as_bytes()
+        .into_iter()
+        .map(|&b| LabelData::Byte(b))
+        .collect::<Vec<_>>();
+    bytes_and_sep_st.push(LabelData::Sep);
+
+    // Todo: Find out if the following can be avoided
+    // Need the suffix tree to have it for the label
+    // lookups, but also need to loop through it and
+    // access it.
+    let bytes_and_sep = bytes_and_sep_st.clone();
     let mut suffix_tree = SuffixTree {
         raw_string: String::from(s),
         nodes: vec![],
+        string: bytes_and_sep_st,
     };
-
-    let string_bytes = s.as_bytes();
 
     // Various control variables
     let mut last_new_node: Option<NodeId>;
     let mut active_node: NodeId = 0;
     // 'active_edge' is the index of the actual byte
-    // in 'string_bytes'. string_bytes[active_edge]
+    // in 'bytes_and_sep'. bytes_and_sep[active_edge]
     // would give the current byte
     let mut active_edge: usize = 0;
     let mut active_length: usize = 0;
     let mut remaining_suffix_count: usize = 0;
 
-    for (i, b) in s.bytes().enumerate() {
+    for (i, &b) in bytes_and_sep.iter().enumerate() {
         // Update global_end and increment remaining suffix
         global_end.set(global_end.get() + 1);
         remaining_suffix_count += 1;
@@ -225,28 +317,29 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
             } else {
                 // Active length not 0, so traversing somewhere at the moment
                 // Check if next character is the same
-                let mut next_byte: Option<u8> = None;
+                let mut next_byte: Option<LabelData> = None;
 
                 // Getting the next character is non-trivial.
                 // It could be that it is on the label for the
                 // 'node' which is the easy one (1), but it could
                 // also be the case that it is a child of 'node'
                 // that continues the label, so would have to
-                // iterate until we find the correct node (3), or
-                // until we find that it should be created. There
+                // iterate until we find the correct node, or
+                // until we find that it should be created (3). There
                 // is one additional case however if the next char
                 // should be created at the beginning of one of the
                 // children (2).
                 // Can check for (1) by the difference in end and
                 // start being greater than active_length
-                // Can check for (2) by the active_length being +1
-                // greater than the diff.
+                // Can check for (2) by the active_length being
+                // equal to the diff.
                 // (3) is more tricky however, as a new child node
-                // needs to be created and short-circuited.
+                // needs to be created and short-circuited, while
+                // also keeping track of suffix_link etc
                 let mut found_next_character = false;
                 loop {
                     let n = *nodes[active_node]
-                        .child(&string_bytes[active_edge])
+                        .child(&bytes_and_sep[active_edge])
                         .unwrap();
                     let node = &nodes[n];
 
@@ -259,8 +352,8 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
                     } else if node.length() == active_length {
                         // (2)
                         // Check for child node
-                        if node.has_child(&string_bytes[active_edge]) {
-                            next_byte = Some(string_bytes[active_edge]);
+                        if node.has_child(&bytes_and_sep[active_edge]) {
+                            next_byte = Some(bytes_and_sep[active_edge]);
                             found_next_character = true;
                             break;
                         } else {
@@ -268,17 +361,11 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
                             // Special case, need to short-circuit
                             // after creating new leaf node
 
-                            // Hacky rust.. Probably need to figure out how
-                            // to circumvent this... But need to override n
-                            // and node to free up nodes variable so we can
-                            // mutate it
                             let node_id = node.id;
-                            let node = 0;
-                            let n = 0;
                             let new_node = Node::new(nodes.len(), Some(node_id), i, &global_end);
                             nodes[node_id]
                                 .children
-                                .insert(string_bytes[active_edge], new_node.id);
+                                .insert(bytes_and_sep[active_edge], new_node.id);
                             nodes.push(new_node);
                             if let Some(last_new_node_id) = last_new_node {
                                 nodes[last_new_node_id].suffix_link = Some(node_id);
@@ -303,7 +390,7 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
                     // point and repeating loop.
                     else {
                         // Update active point
-                        active_node = *node.child(&string_bytes[active_edge]).unwrap();
+                        active_node = *node.child(&bytes_and_sep[active_edge]).unwrap();
                         active_length = active_length - node.length() - 1;
                         active_edge = active_edge + node.length() + 1;
                     }
@@ -327,18 +414,12 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
                     // - Creates new internal node, splitting up the path
                     // - Decrements active_length by 1
                     // - Increments active_edge by 1
-
                     let nodes_len = nodes.len();
                     let root_id = nodes[0].id;
 
-                    // Have to override n and node here in order to
-                    // not mess with rust's borrowing rules...
-                    // Todo: There might be a better way?
-                    let _tmp_node = &nodes[active_node];
                     let n = *nodes[active_node]
-                        .child(&string_bytes[active_edge])
+                        .child(&bytes_and_sep[active_edge])
                         .unwrap();
-
                     let node = &mut nodes[n];
                     let new_node = Node::new(
                         nodes_len,
@@ -350,9 +431,9 @@ fn init_suffix_tree(s: &str) -> SuffixTree {
                     let node_to_update_id = node.id;
                     node.end = Rc::new(Cell::new(node.start + active_length));
                     node.children
-                        .insert(string_bytes[new_node.start], new_node.id);
+                        .insert(bytes_and_sep[new_node.start], new_node.id);
                     node.children
-                        .insert(string_bytes[new_node2.start], new_node2.id);
+                        .insert(bytes_and_sep[new_node2.start], new_node2.id);
                     // Set suffix links. The new node is set to root, and
                     // last_new_node (if exists) is set to the new node.
                     node.suffix_link = Some(root_id);
@@ -444,7 +525,7 @@ mod tests {
 
     #[test]
     fn basic() {
-        let st = SuffixTree::new("banana$");
+        let st = SuffixTree::new("banana");
         println!("{:?}", st.raw_string.as_bytes());
         println!("{:?}", st);
     }
