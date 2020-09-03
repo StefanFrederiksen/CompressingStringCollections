@@ -315,7 +315,7 @@ fn internal_contains_suffix(st: &SuffixTree, suffix: &[u8]) -> bool {
         }
         i += 1;
     }
-    return true;
+    return cur_node.is_leaf();
 }
 
 fn internal_contains_substring(_st: &SuffixTree, _substr: &[u8]) -> bool {
@@ -443,15 +443,6 @@ mod tests {
             .count()
             == s.len() + 1
     }
-
-    // #[test]
-    // fn t() {
-    //     let s = "⁀⁀";
-    //     let st = SuffixTree::new(s);
-    //     for i in 0..s.len() {
-    //         assert!(st.contains_suffix(&s.as_bytes()[i..]));
-    //     }
-    // }
 
     #[quickcheck]
     fn contains_all_suffixes(s: String) -> bool {
