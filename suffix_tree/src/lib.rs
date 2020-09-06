@@ -46,13 +46,10 @@ impl SuffixTree {
             .label_of_node(node)
             .into_iter()
             .map(|l| l.as_readable())
-            .fold(vec![], |mut acc, ls| {
-                let mut v = ls.to_vec();
-                acc.append(&mut v);
-                acc
-            });
+            .flatten()
+            .collect::<Vec<_>>();
 
-        match String::from_utf8(label_data.to_vec()) {
+        match String::from_utf8(label_data.clone()) {
             Ok(s) => s,
             Err(_) => format!("{:?}", label_data),
         }
@@ -88,7 +85,20 @@ impl fmt::Debug for SuffixTree {
             if node.is_root() {
                 writeln!(f, "ROOT")?;
             } else {
-                writeln!(f, "{}{:?}", indent, &st.label_of_node(node))?;
+                let slice = match node.is_leaf() {
+                    true => &st.raw_string[node.suffix_index.unwrap()..],
+                    false => &st.raw_string[node.suffix_index.unwrap()..node.end.get()],
+                };
+                writeln!(
+                    f,
+                    "{}{:?} ({:?}: {}, {:?}) --- {}",
+                    indent,
+                    &st.label_of_node_formatted(node),
+                    node.suffix_index.unwrap(),
+                    node.start,
+                    node.end.get(),
+                    slice // &st.raw_string[node.suffix_index.unwrap()..]
+                )?;
             }
             for child in node.children().values() {
                 fmt(f, st, &st.nodes[*child], depth + 1)?;
@@ -98,7 +108,7 @@ impl fmt::Debug for SuffixTree {
         writeln!(f, "\n-----------------------------------------")?;
         writeln!(f, "SUFFIX TREE")?;
         writeln!(f, "raw string: {}", self.raw_string)?;
-        writeln!(f, "string: {:?}", self.string)?;
+        // writeln!(f, "string: {:?}", self.string)?;
         fmt(f, self, self.root(), 0)?;
         writeln!(f, "-----------------------------------------")
     }
@@ -121,14 +131,13 @@ fn internal_to_suffix_tree(s: &str) -> SuffixTree {
     // and lastly appends the separator at the
     // end of this list. This ensures a unique
     // last byte to finish up the suffix tree.
-    let mut bytes_and_sep_st = s
+    let mut bytes_and_sep = s
         .as_bytes()
         .into_iter()
         .map(|&b| LabelData::Byte(b))
         .collect::<Vec<_>>();
-    bytes_and_sep_st.push(LabelData::Sep);
+    bytes_and_sep.push(LabelData::Sep);
 
-    let bytes_and_sep = bytes_and_sep_st.clone();
     let mut suffix_tree = SuffixTree {
         raw_string: String::from(s),
         nodes: vec![],
@@ -164,6 +173,7 @@ fn internal_to_suffix_tree(s: &str) -> SuffixTree {
         None
     }
 
+    // Build up the entire node tree with all the relations
     for (i, &b) in bytes_and_sep.iter().enumerate() {
         // Update global_end and increment remaining suffix
         // Extension rule 1 for global_end
@@ -280,13 +290,37 @@ fn internal_to_suffix_tree(s: &str) -> SuffixTree {
         }
     }
 
+    // Now to actually be able to find the suffix
+    // index for a given node, we need to run a DFS
+    // traversal on the tree, and the index is then
+    // found by `s.len() - label_height`.
+    let mut stack = vec![(root_id, 0)];
+    while let Some((node_id, label_height)) = stack.pop() {
+        let new_height;
+        if node_id != root_id {
+            nodes[node_id].suffix_index = Some(nodes[node_id].start - label_height);
+            new_height = label_height + nodes[node_id].length();
+        } else {
+            new_height = label_height;
+        }
+        for n in nodes[node_id].children().values() {
+            stack.push((*n, new_height));
+        }
+    }
+
     suffix_tree.nodes = nodes;
     suffix_tree.string = bytes_and_sep;
     suffix_tree
 }
 
-// Todo: Make this prettier
 fn internal_contains_suffix(st: &SuffixTree, suffix: &[u8]) -> bool {
+    // While the empty string is strictly a
+    // suffix, I'm not sure if it makes sense
+    // in practice, so for now just discard it
+    if suffix.len() == 0 {
+        return false;
+    }
+
     // Always starts from root
     let nodes = &st.nodes;
     let mut cur_node = st.root();
@@ -322,14 +356,15 @@ fn internal_contains_substring(_st: &SuffixTree, _substr: &[u8]) -> bool {
     true
 }
 
-// fn find_longest_substring(tree: &SuffixTree, bytes: &[u8]) -> (usize, usize) {
+// Returns the starting index of the substring, and the ending index (not inclusive)
+// fn internal_longest_substring(tree: &SuffixTree, bytes: &[u8]) -> (usize, usize) {
 //     let mut current_node = tree.root();
 //     let mut position_in_bytes = 0;
 
 //     // Edge case for the beginning, is used to find the start position
 //     // Todo: This might panic
 //     current_node = current_node.children().get(&bytes[0]).unwrap();
-//     let start = current_node.start() as usize;
+//     let start = current_node.start;
 
 //     // First label might be longer than 1 byte, so check along it
 //     for b in tree.label_of_node(&current_node) {
@@ -432,6 +467,13 @@ mod tests {
     //     assert_eq!((1, 6), result);
     // }
 
+    #[test]
+    fn does_not_contain_empty_string_as_suffix() {
+        let st = SuffixTree::new("banana");
+        let empty = [];
+        assert!(!st.contains_suffix(&empty));
+    }
+
     // There are str.len() + 1 leaves since the
     // separator is also added as a leaf from the root.
     #[quickcheck]
@@ -442,6 +484,14 @@ mod tests {
             .filter(|&n| n.is_leaf())
             .count()
             == s.len() + 1
+    }
+
+    #[quickcheck]
+    fn every_internal_node_has_at_least_two_children(s: String) -> bool {
+        SuffixTree::new(&s)
+            .nodes
+            .iter()
+            .all(|n| !n.is_internal_node() || n.children().values().count() >= 2)
     }
 
     #[quickcheck]

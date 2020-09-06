@@ -25,6 +25,21 @@ pub struct Node {
 
   pub start: usize,
   pub end: Rc<Cell<usize>>,
+
+  // Todo: Change all of this...
+  // This would have been None for non-leaf nodes,
+  // and Some for leaf nodes, where the usize
+  // represents the index of which the suffix starts
+  // in the original string. For example
+  // s[suffix_index..] would give the suffix for
+  // the particular leaf node. But to properly
+  // support finding the largest substring, every
+  // node but the root has this index. For a non-
+  // leaf node, the substring can be found by
+  // s[suffix_index..node.end] (this is identical
+  // to the original way of calling it in a leaf
+  // node).
+  pub suffix_index: Option<usize>,
 }
 
 impl Node {
@@ -42,6 +57,7 @@ impl Node {
       suffix_link,
       start,
       end: Rc::clone(global_end),
+      suffix_index: None,
     }
   }
 
@@ -69,6 +85,10 @@ impl Node {
   // as the last part?
   pub fn is_leaf(&self) -> bool {
     self.children.is_empty()
+  }
+
+  pub fn is_internal_node(&self) -> bool {
+    !self.is_root() && !self.is_leaf()
   }
 
   pub fn length(&self) -> usize {
