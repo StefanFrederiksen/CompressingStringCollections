@@ -19,6 +19,10 @@ pub enum LabelData {
 // The separator as printed in output
 static SEP: &'static str = "<$>";
 impl LabelData {
+  pub fn new(b: u8) -> Self {
+    LabelData::Byte(b)
+  }
+
   pub fn as_readable(&self) -> Vec<u8> {
     match self {
       Self::Byte(b) => vec![*b],

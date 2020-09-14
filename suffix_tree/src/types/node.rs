@@ -1,5 +1,6 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::ops::Range;
 use std::rc::Rc;
 
 use super::label_data::LabelData;
@@ -26,19 +27,14 @@ pub struct Node {
   pub start: usize,
   pub end: Rc<Cell<usize>>,
 
-  // Todo: Change all of this...
-  // This would have been None for non-leaf nodes,
-  // and Some for leaf nodes, where the usize
-  // represents the index of which the suffix starts
-  // in the original string. For example
-  // s[suffix_index..] would give the suffix for
-  // the particular leaf node. But to properly
-  // support finding the largest substring, every
-  // node but the root has this index. For a non-
-  // leaf node, the substring can be found by
-  // s[suffix_index..node.end] (this is identical
-  // to the original way of calling it in a leaf
-  // node).
+  // The suffix index is where the suffix of the
+  // node starts in the original string. Normally
+  // this would just be for the leaf nodes, but
+  // to support substrings as well, this is
+  // changed a little bit.
+  // Usage is done via the suffix_range function
+  // and then used as a slice of the string.
+  // `string[node.suffix_range()]`
   pub suffix_index: Option<usize>,
 }
 
@@ -49,7 +45,7 @@ impl Node {
     suffix_link: Option<NodeId>,
     start: usize,
     global_end: &Rc<Cell<usize>>,
-  ) -> Node {
+  ) -> Self {
     Node {
       id,
       parent,
@@ -73,6 +69,7 @@ impl Node {
     &self.children
   }
 
+  // A node is the root if it has no parent
   pub fn is_root(&self) -> bool {
     match self.parent {
       None => true,
@@ -81,17 +78,23 @@ impl Node {
   }
 
   // A node is a leaf if it has no children
-  // ? Maybe also only if it has the LabelData::Sep
-  // as the last part?
   pub fn is_leaf(&self) -> bool {
     self.children.is_empty()
   }
 
+  // An internal node is neither the root nor a leaf
   pub fn is_internal_node(&self) -> bool {
     !self.is_root() && !self.is_leaf()
   }
 
   pub fn length(&self) -> usize {
     self.end.get() - self.start
+  }
+
+  pub fn suffix_range(&self) -> Range<usize> {
+    // The leaf is an additional character, namely the
+    // LabelData::Sep value, hence the subtraction.
+    let subtraction = if self.is_leaf() { 1 } else { 0 };
+    self.suffix_index.unwrap()..self.end.get() - subtraction
   }
 }

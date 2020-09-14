@@ -2,6 +2,8 @@ use suffix_tree::SuffixTree;
 
 // A list of tuples (start, end) containing the indexes
 // for the base string, from which to decode the data
+// Normally this would be (start, offset) but to work
+// easily with rust's slices, this is the end instead.
 type EncodePart = (usize, usize);
 type EncodedString = Vec<EncodePart>;
 pub struct EncodedData {
@@ -10,8 +12,8 @@ pub struct EncodedData {
 }
 
 // Todo: Find ways to improve this
-fn base_string(strings: &[String]) -> &str {
-  &strings[0]
+fn base_string(strings: &[&str]) -> &str {
+  strings[0]
 }
 
 fn create_suffix_tree(s: &str) -> SuffixTree {
@@ -32,7 +34,7 @@ fn encode(strings: &[String], suffix_tree: &SuffixTree) -> EncodedData {
   }
 
   EncodedData {
-    base_string: String::from(suffix_tree.string()),
+    base_string: suffix_tree.string(),
     data,
   }
 }
