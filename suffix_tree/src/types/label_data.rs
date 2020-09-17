@@ -48,6 +48,24 @@ impl PartialEq for LabelData {
   }
 }
 
+impl PartialEq<u8> for LabelData {
+  fn eq(&self, other: &u8) -> bool {
+    match (self, other) {
+      (Self::Byte(b1), b2) => b1 == b2,
+      _ => false,
+    }
+  }
+}
+
+impl PartialEq<LabelData> for u8 {
+  fn eq(&self, other: &LabelData) -> bool {
+    match (self, other) {
+      (b1, LabelData::Byte(b2)) => b1 == b2,
+      _ => false,
+    }
+  }
+}
+
 impl Eq for LabelData {}
 
 impl Ord for LabelData {

@@ -27,7 +27,7 @@ pub struct SuffixTree {
 }
 
 impl SuffixTree {
-    pub fn new(s: &str) -> Self {
+    pub fn new<T: AsRef<str>>(s: T) -> Self {
         internal_to_suffix_tree(s)
     }
 
@@ -67,11 +67,11 @@ impl SuffixTree {
         internal_contains_suffix(self, suffix)
     }
 
-    pub fn contains_substring(&self, substr: &[u8]) -> bool {
-        internal_contains_substring(self, substr)
-    }
+    // pub fn contains_substring(&self, substr: &[u8]) -> bool {
+    //     internal_contains_substring(self, substr)
+    // }
 
-    pub fn longest_substring(&self, substr: &[u8]) -> (usize, usize) {
+    pub fn longest_substring(&self, substr: &[u8]) -> Option<(usize, usize)> {
         internal_longest_substring(self, substr)
     }
 
@@ -115,7 +115,7 @@ impl fmt::Debug for SuffixTree {
     }
 }
 
-fn internal_to_suffix_tree(s: &str) -> SuffixTree {
+fn internal_to_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
     // Mutable global end, only possible via
     // the Cell container.
     let global_end = Rc::new(Cell::new(0));
@@ -133,6 +133,7 @@ fn internal_to_suffix_tree(s: &str) -> SuffixTree {
     // end of this list. This ensures a unique
     // last byte to finish up the suffix tree.
     let mut bytes_and_sep = s
+        .as_ref()
         .as_bytes()
         .into_iter()
         .map(|&b| LabelData::new(b))
@@ -140,7 +141,7 @@ fn internal_to_suffix_tree(s: &str) -> SuffixTree {
     bytes_and_sep.push(LabelData::Sep);
 
     let mut suffix_tree = SuffixTree {
-        raw_string: String::from(s),
+        raw_string: String::from(s.as_ref()),
         nodes: vec![],
         string: vec![],
     };
@@ -352,15 +353,13 @@ fn internal_contains_suffix(st: &SuffixTree, suffix: &[u8]) -> bool {
     cur_node.is_leaf()
 }
 
-fn internal_contains_substring(_st: &SuffixTree, _substr: &[u8]) -> bool {
-    true
-}
-
 // Returns the starting index of the substring, and the ending index (not inclusive)
-// Todo: What to do if the next byte is not in the SuffixTree?
-fn internal_longest_substring(st: &SuffixTree, bytes: &[u8]) -> (usize, usize) {
+// if one exists, otherwise returns None
+fn internal_longest_substring(st: &SuffixTree, bytes: &[u8]) -> Option<(usize, usize)> {
     if bytes.len() == 0 {
+        // Todo: Panic or return None?
         panic!("No bytes left to find substring on");
+        // return None;
     }
 
     // Todo: Need to find the last node,
@@ -378,9 +377,9 @@ fn internal_longest_substring(st: &SuffixTree, bytes: &[u8]) -> (usize, usize) {
                 for j in 1..label.len() {
                     // If it runs out of bytes to check, or a byte does not
                     // match, then the longest substring is found
-                    if i + j >= bytes.len() || bytes[i + j] != label[j].unwrap_byte() {
+                    if i + j >= bytes.len() || bytes[i + j] != label[j] {
                         let start = nodes[*next_node_id].suffix_index.unwrap();
-                        return (start, start + i + j);
+                        return Some((start, start + i + j));
                     }
                 }
 
@@ -395,12 +394,18 @@ fn internal_longest_substring(st: &SuffixTree, bytes: &[u8]) -> (usize, usize) {
         i += 1;
     }
 
+    // If the current node is still root, then
+    // no substring exists
+    if cur_node.is_root() {
+        return None;
+    }
+
     // If this point is ever reached, it is because
     // it did not break early (in the middle of a label)
     // so we can return the suffix_range of the current
     // node.
     let range = cur_node.suffix_range();
-    (range.start, range.end)
+    Some((range.start, range.end))
 }
 
 #[cfg(test)]
@@ -441,7 +446,7 @@ mod tests {
     fn longest_substring1() {
         let tree = SuffixTree::new("banana");
         let string = "ban";
-        let result = tree.longest_substring(string.as_bytes());
+        let result = tree.longest_substring(string.as_bytes()).unwrap();
         assert_eq!((0, 3), result);
     }
 
@@ -449,7 +454,7 @@ mod tests {
     fn longest_substring2() {
         let tree = SuffixTree::new("banana");
         let string = "anana";
-        let result = tree.longest_substring(string.as_bytes());
+        let result = tree.longest_substring(string.as_bytes()).unwrap();
         assert_eq!((1, 6), result);
     }
 
@@ -457,7 +462,7 @@ mod tests {
     fn longest_substring3() {
         let tree = SuffixTree::new("mississippi");
         let string = "issi";
-        let result = tree.longest_substring(string.as_bytes());
+        let result = tree.longest_substring(string.as_bytes()).unwrap();
         assert_eq!((1, 5), result);
     }
 
@@ -465,7 +470,7 @@ mod tests {
     fn longest_substring4() {
         let tree = SuffixTree::new("mississippi");
         let string = "issip";
-        let result = tree.longest_substring(string.as_bytes());
+        let result = tree.longest_substring(string.as_bytes()).unwrap();
         assert_eq!((4, 9), result);
     }
 
@@ -473,8 +478,16 @@ mod tests {
     fn longest_substring5() {
         let tree = SuffixTree::new("banana");
         let string = "anab";
-        let result = tree.longest_substring(string.as_bytes());
+        let result = tree.longest_substring(string.as_bytes()).unwrap();
         assert_eq!((1, 4), result);
+    }
+
+    #[test]
+    fn longest_substring_none() {
+        let tree = SuffixTree::new("banana");
+        let string = "xqr";
+        let result = tree.longest_substring(string.as_bytes());
+        assert_eq!(None, result);
     }
 
     #[test]

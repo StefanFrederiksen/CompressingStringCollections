@@ -1,4 +1,4 @@
-// mod lz77;
+mod relative_lz;
 use suffix_tree::SuffixTree;
 
 fn main() {
