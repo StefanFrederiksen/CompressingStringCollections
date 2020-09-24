@@ -49,7 +49,7 @@ impl SuffixTree {
         let label_data = self
             .label_of_node(node)
             .into_iter()
-            .map(|l| l.as_readable())
+            .map(|l| l.prettify())
             .flatten()
             .collect::<Vec<_>>();
 
@@ -244,13 +244,12 @@ fn internal_to_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
                 // New character is currently not in the label
                 // so will have to create a new internal node,
                 // and a new leaf node.
-                let curr_node_start = nodes[next].start;
-                let split_end = Rc::new(Cell::new(curr_node_start + active_length));
+                let split_end = Rc::new(Cell::new(nodes[next].start + active_length));
                 let mut split_node = Node::new(
                     nodes.len(),
                     nodes[next].parent,
                     Some(root_id),
-                    curr_node_start,
+                    nodes[next].start,
                     &split_end,
                 );
                 nodes[active_node]
@@ -271,14 +270,12 @@ fn internal_to_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
                     .children
                     .insert(bytes_and_sep[nodes[next].start], next);
 
-                let split_node_id = split_node.id;
+                if let Some(last_new_node_id) = last_new_node {
+                    nodes[last_new_node_id].suffix_link = Some(split_node.id);
+                }
+                last_new_node = Some(split_node.id);
                 nodes.push(split_node);
                 nodes.push(new_leaf);
-
-                if let Some(last_new_node_id) = last_new_node {
-                    nodes[last_new_node_id].suffix_link = Some(split_node_id);
-                }
-                last_new_node = Some(split_node_id);
             }
 
             remaining_suffix_count -= 1;
@@ -309,8 +306,17 @@ fn internal_to_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
         }
     }
 
+    // Shrinks down nodes and bytes_and_sep to smallest
+    // possible capacity, since no more elements are
+    // added or removed from them now.
+    nodes.shrink_to_fit();
+    bytes_and_sep.shrink_to_fit();
+
+    // Move ownership of notes and the LabelData
     suffix_tree.nodes = nodes;
     suffix_tree.string = bytes_and_sep;
+
+    // And finally return the suffix tree
     suffix_tree
 }
 

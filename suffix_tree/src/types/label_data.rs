@@ -23,7 +23,7 @@ impl LabelData {
     LabelData::Byte(b)
   }
 
-  pub fn as_readable(&self) -> Vec<u8> {
+  pub fn prettify(&self) -> Vec<u8> {
     match self {
       Self::Byte(b) => vec![*b],
       Self::Sep => SEP.as_bytes().to_vec(),
@@ -48,6 +48,7 @@ impl PartialEq for LabelData {
   }
 }
 
+// This allows for calling == between LabelData and u8
 impl PartialEq<u8> for LabelData {
   fn eq(&self, other: &u8) -> bool {
     match (self, other) {
@@ -57,6 +58,8 @@ impl PartialEq<u8> for LabelData {
   }
 }
 
+// Also need the other way around.
+// Why this is not inferred I do not know
 impl PartialEq<LabelData> for u8 {
   fn eq(&self, other: &LabelData) -> bool {
     match (self, other) {
@@ -90,6 +93,6 @@ impl PartialOrd for LabelData {
 
 impl fmt::Debug for LabelData {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-    writeln!(f, "LabelData: {:?}", &self.as_readable())
+    writeln!(f, "LabelData: {:?}", &self.prettify())
   }
 }

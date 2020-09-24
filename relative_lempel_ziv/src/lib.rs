@@ -1,9 +1,9 @@
 // Relative Lempel Ziv Implementation
-
+use std::mem;
 use suffix_tree::SuffixTree;
 
-#[derive(Debug)]
-enum EncodePart {
+#[derive(Debug, Clone, Copy)]
+pub enum EncodePart {
     // The part consists of the (start, end) from
     // the base string. Normally this would be
     // (start, offset) but to work nicely with
@@ -12,13 +12,12 @@ enum EncodePart {
     Byte(u8),
 }
 
-type EncodedString = Vec<EncodePart>;
+pub type EncodedString = Vec<EncodePart>;
 
 #[derive(Debug)]
 pub struct RelativeLempelZiv {
-    // base_string: String,
-    base_data: Vec<u8>,
-    data: Vec<EncodedString>,
+    pub base_data: Vec<u8>,
+    pub data: Vec<EncodedString>,
 }
 
 impl RelativeLempelZiv {
@@ -31,13 +30,30 @@ impl RelativeLempelZiv {
     pub fn decode(&self) -> Vec<String> {
         internal_decode(self)
     }
+
+    pub fn memory_footprint(&self) -> usize {
+        internal_memory_footprint(self)
+    }
+
+    // Todo: Maybe this is where the subspace mapping could really come into play
+    // Also O-notation of this can't be constant can it..? Has to loop through
+    // the EncodedString to find the right position... Even with saving the position
+    // space of the EncodePart, it would still at least be binary search.
+    pub fn xth_byte(&self) -> u8 {
+        0
+    }
 }
+
+// Todo: Implement serialize
+// https://serde.rs/impl-serialize.html
+// impl Serialize for RelativeLempelZiv {
+
+// }
 
 // Todo: Find ways to improve the base string finding
 // Currently just takes the first..
-// Also wtf with this function signature
 fn base_string<T: AsRef<str>>(strings: &[T]) -> (&T, &[T]) {
-    (&strings[0], &strings[1..])
+    (&strings[0], &strings[..])
 }
 
 fn create_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
@@ -68,21 +84,19 @@ fn encode_parts<T: AsRef<str>>(strings: &[T], suffix_tree: &SuffixTree) -> Relat
             };
             encoded_string_list.push(next);
         }
-
+        encoded_string_list.shrink_to_fit();
         data.push(encoded_string_list);
     }
 
+    data.shrink_to_fit();
     RelativeLempelZiv {
-        // base_string: String::from(suffix_tree.string()),
         base_data: suffix_tree.string().as_bytes().to_vec(),
         data,
     }
 }
 
-// Todo: Lots of cloning going on (.clone() or .to_vec())
-// Need to consider if consuming RelativeLempelZiv could avoid it...
 fn internal_decode(encoded_data: &RelativeLempelZiv) -> Vec<String> {
-    let mut data = vec![String::from_utf8(encoded_data.base_data.clone()).unwrap()];
+    let mut data = Vec::with_capacity(encoded_data.data.len());
 
     for encoded_string in &encoded_data.data {
         let mut string_parts = vec![];
@@ -101,19 +115,36 @@ fn internal_decode(encoded_data: &RelativeLempelZiv) -> Vec<String> {
     data
 }
 
+fn internal_memory_footprint(encoded: &RelativeLempelZiv) -> usize {
+    let mut size = 0;
+
+    // "base_data" size
+    size += internal_memory_single_list(&encoded.base_data);
+
+    // "data" size (two-dimensional vector)
+    size += internal_memory_double_list(&encoded.data);
+
+    size
+}
+
+// Using the Copy to ensure it is somewhat
+// a primitive type being used, since any non-
+// primitive type is heap-allocated
+fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
+    v.capacity() * mem::size_of::<T>()
+}
+
+fn internal_memory_double_list<T: Copy>(vv: &Vec<Vec<T>>) -> usize {
+    vv.iter().map(|n| internal_memory_single_list(n)).sum()
+}
+
 // Priority list:
-// 1. Make the Relative Lempel Ziv (RLZ)
-// 2. Verify (Property-based testing)
-// 3. Benchmark (cargo bench!!!)
+// 1. Make the Relative Lempel Ziv (RLZ) ✓
+// 2. Verify (Property-based testing) ✓
+// 3. Benchmark (both time and compression rate)
 
-// Steps for RLZ
-// 1. Find suitable base string
-// 2. Create SuffixTree of base string
-// 3. Loop through all strings, encoding them (by prefix) to suffixes of the base string
-// 4. Profit
-
-// Considerations
-// 1. No suitable base string found in collection
+// Improvements
+// 2. If the alphabet is <= 255 letters, is it possible to map the letters into a single byte value, rather than taking multiple bytes?
 
 #[cfg(test)]
 #[macro_use(quickcheck)]
@@ -152,7 +183,7 @@ mod tests {
             // Randomly select size of array [1, 1000)
             let mut rng = rand::thread_rng();
             let size = rng.gen_range(1, 1000);
-            let mut strings = vec![];
+            let mut strings = Vec::with_capacity(size);
             for _ in 0..size {
                 strings.push(String::arbitrary(g));
             }
@@ -162,7 +193,6 @@ mod tests {
 
     #[quickcheck]
     fn encode_decode(arr: ArbArray) -> bool {
-        let rlz = RelativeLempelZiv::encode(&arr.strings[..]);
-        arr.strings == rlz.decode()
+        arr.strings == RelativeLempelZiv::encode(&arr.strings).decode()
     }
 }

@@ -6,8 +6,8 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[dependencies.suffix_tree]
-path = "../suffix_tree"
+[dependencies.relative_lempel_ziv]
+path = "../relative_lempel_ziv"
 
 [dev-dependencies]
 quickcheck = "0.9.2"
