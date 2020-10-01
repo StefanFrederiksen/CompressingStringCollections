@@ -1,30 +1,37 @@
 // Relative Lempel Ziv Implementation
+use std::convert::{TryFrom, TryInto};
+use std::fmt;
 use std::mem;
 use suffix_tree::SuffixTree;
 
 #[derive(Debug, Clone, Copy)]
-pub enum EncodePart {
+pub enum EncodePart<U> {
     // The part consists of the (start, end) from
     // the base string. Normally this would be
     // (start, offset) but to work nicely with
     // Rust's slices, the end is used instead.
-    Part(usize, usize),
+    Part(U, U),
     Byte(u8),
 }
 
-pub type EncodedString = Vec<EncodePart>;
+pub type EncodedString<U> = Vec<EncodePart<U>>;
 
 #[derive(Debug)]
-pub struct RelativeLempelZiv {
+pub struct RelativeLempelZiv<U> {
     pub base_data: Vec<u8>,
-    pub data: Vec<EncodedString>,
+    pub data: Vec<EncodedString<U>>,
 }
 
-impl RelativeLempelZiv {
+impl<U> RelativeLempelZiv<U>
+where
+    U: Copy + TryFrom<usize> + TryInto<usize>,
+    <U as TryFrom<usize>>::Error: fmt::Debug,
+    <U as TryInto<usize>>::Error: fmt::Debug,
+{
     pub fn encode<T: AsRef<str>>(strings: &[T]) -> Self {
-        let (base_string, rest_strings) = base_string(&strings);
+        let base_string = base_string(&strings);
         let st = create_suffix_tree(base_string);
-        encode_parts(rest_strings, &st)
+        encode_parts(strings, &st)
     }
 
     pub fn decode(&self) -> Vec<String> {
@@ -35,10 +42,6 @@ impl RelativeLempelZiv {
         internal_memory_footprint(self)
     }
 
-    // Todo: Maybe this is where the subspace mapping could really come into play
-    // Also O-notation of this can't be constant can it..? Has to loop through
-    // the EncodedString to find the right position... Even with saving the position
-    // space of the EncodePart, it would still at least be binary search.
     pub fn xth_byte(&self) -> u8 {
         0
     }
@@ -52,18 +55,23 @@ impl RelativeLempelZiv {
 
 // Todo: Find ways to improve the base string finding
 // Currently just takes the first..
-fn base_string<T: AsRef<str>>(strings: &[T]) -> (&T, &[T]) {
-    (&strings[0], &strings[..])
+fn base_string<T: AsRef<str>>(strings: &[T]) -> &T {
+    &strings[0]
 }
 
 fn create_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
     SuffixTree::new(s)
 }
 
-fn encode_parts<T: AsRef<str>>(strings: &[T], suffix_tree: &SuffixTree) -> RelativeLempelZiv {
+fn encode_parts<U, T>(strings: &[T], suffix_tree: &SuffixTree) -> RelativeLempelZiv<U>
+where
+    U: TryFrom<usize>,
+    <U as TryFrom<usize>>::Error: fmt::Debug,
+    T: AsRef<str>,
+{
     let mut data = vec![];
     for s in strings {
-        let mut encoded_string_list: Vec<EncodePart> = vec![];
+        let mut encoded_string_list: Vec<EncodePart<U>> = vec![];
 
         let base_bytes = s.as_ref().as_bytes();
         let mut index = 0;
@@ -72,8 +80,10 @@ fn encode_parts<T: AsRef<str>>(strings: &[T], suffix_tree: &SuffixTree) -> Relat
             match suffix_tree.longest_substring(&base_bytes[index..]) {
                 // If a substring was found, we encode the start and end
                 Some((start, end)) => {
-                    next = EncodePart::Part(start, end);
                     index += end - start;
+                    let start_converted = U::try_from(start).unwrap();
+                    let end_converted = U::try_from(end).unwrap();
+                    next = EncodePart::Part(start_converted, end_converted);
                 }
                 // If no substring was found, we just save the next byte
                 // and try again on the remaining
@@ -95,7 +105,11 @@ fn encode_parts<T: AsRef<str>>(strings: &[T], suffix_tree: &SuffixTree) -> Relat
     }
 }
 
-fn internal_decode(encoded_data: &RelativeLempelZiv) -> Vec<String> {
+fn internal_decode<U>(encoded_data: &RelativeLempelZiv<U>) -> Vec<String>
+where
+    U: Copy + TryInto<usize>,
+    <U as TryInto<usize>>::Error: fmt::Debug,
+{
     let mut data = Vec::with_capacity(encoded_data.data.len());
 
     for encoded_string in &encoded_data.data {
@@ -103,7 +117,12 @@ fn internal_decode(encoded_data: &RelativeLempelZiv) -> Vec<String> {
 
         for part in encoded_string {
             let mut c = match part {
-                EncodePart::Part(start, end) => encoded_data.base_data[*start..*end].to_vec(),
+                EncodePart::Part(start, end) => {
+                    let _start = (*start).try_into().unwrap();
+                    let _end = (*end).try_into().unwrap();
+
+                    encoded_data.base_data[_start.._end].to_vec()
+                }
                 EncodePart::Byte(c) => vec![*c],
             };
             string_parts.append(&mut c);
@@ -115,7 +134,7 @@ fn internal_decode(encoded_data: &RelativeLempelZiv) -> Vec<String> {
     data
 }
 
-fn internal_memory_footprint(encoded: &RelativeLempelZiv) -> usize {
+fn internal_memory_footprint<U: Copy>(encoded: &RelativeLempelZiv<U>) -> usize {
     let mut size = 0;
 
     // "base_data" size
@@ -127,15 +146,12 @@ fn internal_memory_footprint(encoded: &RelativeLempelZiv) -> usize {
     size
 }
 
-// Using the Copy to ensure it is somewhat
-// a primitive type being used, since any non-
-// primitive type is heap-allocated
 fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
     v.capacity() * mem::size_of::<T>()
 }
 
 fn internal_memory_double_list<T: Copy>(vv: &Vec<Vec<T>>) -> usize {
-    vv.iter().map(|n| internal_memory_single_list(n)).sum()
+    vv.iter().map(|v| internal_memory_single_list(v)).sum()
 }
 
 // Priority list:
@@ -160,7 +176,7 @@ mod tests {
     fn basic() {
         let test_data = vec!["banana", "anaban", "aaa", "nananananabananana"];
         println!("Original: {:?}", test_data);
-        let encoded = RelativeLempelZiv::encode(&test_data);
+        let encoded = RelativeLempelZiv::<u8>::encode(&test_data);
         println!("Encoded: {:?}", encoded);
 
         let decoded = encoded.decode();
@@ -193,6 +209,6 @@ mod tests {
 
     #[quickcheck]
     fn encode_decode(arr: ArbArray) -> bool {
-        arr.strings == RelativeLempelZiv::encode(&arr.strings).decode()
+        arr.strings == RelativeLempelZiv::<u32>::encode(&arr.strings).decode()
     }
 }
