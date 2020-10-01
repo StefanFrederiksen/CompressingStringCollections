@@ -1,4 +1,5 @@
 // Relative Lempel Ziv Implementation
+use std::cmp::Ord;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::mem;
@@ -6,12 +7,14 @@ use suffix_tree::SuffixTree;
 
 #[derive(Debug, Clone, Copy)]
 pub enum EncodePart<U> {
-    // The part consists of the (start, end) from
-    // the base string. Normally this would be
-    // (start, offset) but to work nicely with
-    // Rust's slices, the end is used instead.
-    Part(U, U),
-    Byte(u8),
+    // (len, start, end)
+    // The (start, end) part consists of the start
+    // and end relative to the base string. Normally
+    // this would be start and offset but to work
+    // nicely with Rust's slices, the end is used
+    // instead.
+    Part(U, U, U),
+    Byte(U, u8),
 }
 
 pub type EncodedString<U> = Vec<EncodePart<U>>;
@@ -24,7 +27,7 @@ pub struct RelativeLempelZiv<U> {
 
 impl<U> RelativeLempelZiv<U>
 where
-    U: Copy + TryFrom<usize> + TryInto<usize>,
+    U: Copy + Ord + TryFrom<usize> + TryInto<usize>,
     <U as TryFrom<usize>>::Error: fmt::Debug,
     <U as TryInto<usize>>::Error: fmt::Debug,
 {
@@ -42,8 +45,9 @@ where
         internal_memory_footprint(self)
     }
 
-    pub fn xth_byte(&self) -> u8 {
-        0
+    // Gets the x'th byte from the i'th string
+    pub fn random_access(&self, i: U, x: U) -> u8 {
+        internal_random_access(self, i, x)
     }
 }
 
@@ -72,24 +76,28 @@ where
     let mut data = vec![];
     for s in strings {
         let mut encoded_string_list: Vec<EncodePart<U>> = vec![];
+        let mut len = 0;
 
         let base_bytes = s.as_ref().as_bytes();
         let mut index = 0;
         while index < base_bytes.len() {
             let next;
+            let len_converted = U::try_from(len).unwrap();
             match suffix_tree.longest_substring(&base_bytes[index..]) {
                 // If a substring was found, we encode the start and end
                 Some((start, end)) => {
                     index += end - start;
                     let start_converted = U::try_from(start).unwrap();
                     let end_converted = U::try_from(end).unwrap();
-                    next = EncodePart::Part(start_converted, end_converted);
+                    next = EncodePart::Part(len_converted, start_converted, end_converted);
+                    len += end - start;
                 }
                 // If no substring was found, we just save the next byte
                 // and try again on the remaining
                 None => {
-                    next = EncodePart::Byte(base_bytes[index]);
+                    next = EncodePart::Byte(len_converted, base_bytes[index]);
                     index += 1;
+                    len += 1;
                 }
             };
             encoded_string_list.push(next);
@@ -117,13 +125,13 @@ where
 
         for part in encoded_string {
             let mut c = match part {
-                EncodePart::Part(start, end) => {
-                    let _start = (*start).try_into().unwrap();
-                    let _end = (*end).try_into().unwrap();
+                EncodePart::Part(_, start, end) => {
+                    let start_as_u = (*start).try_into().unwrap();
+                    let end_as_u = (*end).try_into().unwrap();
 
-                    encoded_data.base_data[_start.._end].to_vec()
+                    encoded_data.base_data[start_as_u..end_as_u].to_vec()
                 }
-                EncodePart::Byte(c) => vec![*c],
+                EncodePart::Byte(_, c) => vec![*c],
             };
             string_parts.append(&mut c);
         }
@@ -152,6 +160,51 @@ fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
 
 fn internal_memory_double_list<T: Copy>(vv: &Vec<Vec<T>>) -> usize {
     vv.iter().map(|v| internal_memory_single_list(v)).sum()
+}
+
+fn internal_random_access<U>(rlt: &RelativeLempelZiv<U>, i: U, x: U) -> u8
+where
+    U: Copy + Ord + TryInto<usize>,
+    <U as TryInto<usize>>::Error: fmt::Debug,
+{
+    // Converts i and x into usize for later
+    let i_usize = i.try_into().unwrap();
+    let x_usize = x.try_into().unwrap();
+
+    let encoded_string: &EncodedString<U> = &rlt.data[i_usize];
+
+    // Binary search on the string to find the corresponding
+    // encode part that encompasses the x'th byte
+    let matching_element = encoded_string.binary_search_by(|probe| {
+        let len = match probe {
+            EncodePart::Part(len, _, _) => len,
+            EncodePart::Byte(len, _) => len,
+        };
+        len.cmp(&x)
+    });
+
+    // If the binary search does not find the exact element,
+    // it returns the next position, where it could be inserted.
+    // So because we want the previous one, we can just cover
+    // this use-case via a match.
+    let index = match matching_element {
+        Ok(i) => i,
+        Err(i) => i - 1,
+    };
+
+    match encoded_string[index] {
+        // The x'th byte is found via the difference in the
+        // length of the Part and the requested x, and is
+        // then found from the reference string by adding
+        // start to it.
+        EncodePart::Part(len, start, _) => {
+            let start_usize = start.try_into().unwrap();
+            let len_usize = len.try_into().unwrap();
+            let pos = start_usize + (x_usize - len_usize);
+            rlt.base_data[pos]
+        }
+        EncodePart::Byte(_, byte) => byte,
+    }
 }
 
 // Priority list:
@@ -183,6 +236,16 @@ mod tests {
         println!("Decoded:  {:?}", decoded);
     }
 
+    #[test]
+    fn random_access() {
+        let test_data = vec!["banana", "ananan", "nananananananv"];
+        let encoded = RelativeLempelZiv::<u8>::encode(&test_data);
+
+        assert_eq!(b"a"[0], encoded.random_access(1, 0));
+        assert_eq!(b"v"[0], encoded.random_access(2, 13));
+        assert_eq!(b"n"[0], encoded.random_access(2, 10));
+    }
+
     // Quickcheck does not yet allow randomly generating test data
     // for arrays, and seems like they won't until const generics
     // are added (if even then).
@@ -208,7 +271,24 @@ mod tests {
     }
 
     #[quickcheck]
-    fn encode_decode(arr: ArbArray) -> bool {
+    fn quickcheck_encode_decode(arr: ArbArray) -> bool {
         arr.strings == RelativeLempelZiv::<u32>::encode(&arr.strings).decode()
+    }
+
+    #[quickcheck]
+    fn quickcheck_random_access(arr: ArbArray) -> bool {
+        let mut rng = rand::thread_rng();
+        let index = rng.gen_range(0, arr.strings.len());
+
+        // If the chosen string is an empty string, it
+        // has no bytes to validate against, so we skip it
+        if arr.strings[index].len() == 0 {
+            return true;
+        }
+
+        let xth = rng.gen_range(0, arr.strings[index].len());
+        let encoded = RelativeLempelZiv::<usize>::encode(&arr.strings);
+
+        arr.strings[index].as_bytes()[xth] == encoded.random_access(index, xth)
     }
 }
