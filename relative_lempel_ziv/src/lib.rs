@@ -5,16 +5,26 @@ use std::fmt;
 use std::mem;
 use suffix_tree::SuffixTree;
 
+// For showing output progress to the cli
+use console::style;
+use indicatif::ProgressBar;
+
 #[derive(Debug, Clone, Copy)]
-pub enum EncodePart<U> {
+enum EncodeType<U> {
     // (len, start, end)
     // The (start, end) part consists of the start
     // and end relative to the base string. Normally
     // this would be start and offset but to work
     // nicely with Rust's slices, the end is used
     // instead.
-    Part(U, U, U),
-    Byte(U, u8),
+    Part(U, U),
+    Byte(u8),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EncodePart<U> {
+    len: U,
+    encode_type: EncodeType<U>,
 }
 
 pub type EncodedString<U> = Vec<EncodePart<U>>;
@@ -32,8 +42,16 @@ where
     <U as TryInto<usize>>::Error: fmt::Debug,
 {
     pub fn encode<T: AsRef<str>>(strings: &[T]) -> Self {
+        eprintln!("{} Finding base string...", style("[1/3]").bold().dim());
         let base_string = base_string(&strings);
+
+        eprintln!(
+            "{} Creating suffix tree from base string...",
+            style("[2/3]").bold().dim()
+        );
         let st = create_suffix_tree(base_string);
+
+        eprintln!("{} Encoding...", style("[3/3]").bold().dim());
         encode_parts(strings, &st)
     }
 
@@ -73,8 +91,13 @@ where
     <U as TryFrom<usize>>::Error: fmt::Debug,
     T: AsRef<str>,
 {
+    // For io::stderr output of progress
+    let pb = ProgressBar::new(strings.len() as u64);
+
     let mut data = vec![];
     for s in strings {
+        pb.inc(1);
+
         let mut encoded_string_list: Vec<EncodePart<U>> = vec![];
         let mut len = 0;
 
@@ -89,13 +112,19 @@ where
                     index += end - start;
                     let start_converted = U::try_from(start).unwrap();
                     let end_converted = U::try_from(end).unwrap();
-                    next = EncodePart::Part(len_converted, start_converted, end_converted);
+                    next = EncodePart {
+                        len: len_converted,
+                        encode_type: EncodeType::Part(start_converted, end_converted),
+                    };
                     len += end - start;
                 }
                 // If no substring was found, we just save the next byte
                 // and try again on the remaining
                 None => {
-                    next = EncodePart::Byte(len_converted, base_bytes[index]);
+                    next = EncodePart {
+                        len: len_converted,
+                        encode_type: EncodeType::Byte(base_bytes[index]),
+                    };
                     index += 1;
                     len += 1;
                 }
@@ -105,6 +134,8 @@ where
         encoded_string_list.shrink_to_fit();
         data.push(encoded_string_list);
     }
+
+    pb.finish_and_clear();
 
     data.shrink_to_fit();
     RelativeLempelZiv {
@@ -124,14 +155,14 @@ where
         let mut string_parts = vec![];
 
         for part in encoded_string {
-            let mut c = match part {
-                EncodePart::Part(_, start, end) => {
-                    let start_as_u = (*start).try_into().unwrap();
-                    let end_as_u = (*end).try_into().unwrap();
+            let mut c = match part.encode_type {
+                EncodeType::Part(start, end) => {
+                    let start_as_u = start.try_into().unwrap();
+                    let end_as_u = end.try_into().unwrap();
 
                     encoded_data.base_data[start_as_u..end_as_u].to_vec()
                 }
-                EncodePart::Byte(_, c) => vec![*c],
+                EncodeType::Byte(c) => vec![c],
             };
             string_parts.append(&mut c);
         }
@@ -175,13 +206,7 @@ where
 
     // Binary search on the string to find the corresponding
     // encode part that encompasses the x'th byte
-    let matching_element = encoded_string.binary_search_by(|probe| {
-        let len = match probe {
-            EncodePart::Part(len, _, _) => len,
-            EncodePart::Byte(len, _) => len,
-        };
-        len.cmp(&x)
-    });
+    let matching_element = encoded_string.binary_search_by(|probe| probe.len.cmp(&x));
 
     // If the binary search does not find the exact element,
     // it returns the next position, where it could be inserted.
@@ -192,18 +217,19 @@ where
         Err(i) => i - 1,
     };
 
-    match encoded_string[index] {
+    let encode_part = encoded_string[index];
+    match encode_part.encode_type {
         // The x'th byte is found via the difference in the
         // length of the Part and the requested x, and is
         // then found from the reference string by adding
         // start to it.
-        EncodePart::Part(len, start, _) => {
+        EncodeType::Part(start, _) => {
+            let len_usize = encode_part.len.try_into().unwrap();
             let start_usize = start.try_into().unwrap();
-            let len_usize = len.try_into().unwrap();
             let pos = start_usize + (x_usize - len_usize);
             rlt.base_data[pos]
         }
-        EncodePart::Byte(_, byte) => byte,
+        EncodeType::Byte(byte) => byte,
     }
 }
 
