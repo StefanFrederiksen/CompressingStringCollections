@@ -1,5 +1,6 @@
 // Relative Lempel Ziv Implementation
 use std::cmp::Ord;
+use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::mem;
@@ -10,21 +11,14 @@ use console::style;
 use indicatif::ProgressBar;
 
 #[derive(Debug, Clone, Copy)]
-enum EncodeType<U> {
-    // (len, start, end)
-    // The (start, end) part consists of the start
-    // and end relative to the base string. Normally
-    // this would be start and offset but to work
-    // nicely with Rust's slices, the end is used
-    // instead.
-    Part(U, U),
-    Byte(u8),
-}
-
-#[derive(Debug, Clone, Copy)]
 pub struct EncodePart<U> {
     len: U,
-    encode_type: EncodeType<U>,
+    // (start, end)
+    // These are the start and end relative to the
+    // base string. Normally this would be start
+    // and offset but to work nicely with Rust's
+    // slices, the end is used instead.
+    range: (U, U),
 }
 
 pub type EncodedString<U> = Vec<EncodePart<U>>;
@@ -69,16 +63,39 @@ where
     }
 }
 
-// Todo: Implement serialize
+// Todo (nice to have): Implement serialize
 // https://serde.rs/impl-serialize.html
-// impl Serialize for RelativeLempelZiv {
-
-// }
+// impl Serialize for RelativeLempelZiv { }
 
 // Todo: Find ways to improve the base string finding
-// Currently just takes the first..
-fn base_string<T: AsRef<str>>(strings: &[T]) -> &T {
-    &strings[0]
+fn base_string<T: AsRef<str>>(strings: &[T]) -> String {
+    // Select suitable base string
+    let base_string = strings[0].as_ref();
+
+    // Create hash of all current characters
+    let mut found_chars = HashSet::new();
+    for c in base_string.chars() {
+        found_chars.insert(c);
+    }
+
+    // Iterate through all strings to ensure all characters are covered
+    let mut chars_to_add = Vec::new();
+    for string in strings {
+        for c in string.as_ref().chars() {
+            if !found_chars.contains(&c) {
+                chars_to_add.push(c);
+                found_chars.insert(c);
+            }
+        }
+    }
+
+    let mut return_string = String::with_capacity(base_string.len() + chars_to_add.len());
+    return_string.push_str(&base_string);
+    for c in chars_to_add {
+        return_string.push(c);
+    }
+
+    return_string
 }
 
 fn create_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
@@ -104,31 +121,18 @@ where
         let base_bytes = s.as_ref().as_bytes();
         let mut index = 0;
         while index < base_bytes.len() {
-            let next;
             let len_converted = U::try_from(len).unwrap();
-            match suffix_tree.longest_substring(&base_bytes[index..]) {
-                // If a substring was found, we encode the start and end
-                Some((start, end)) => {
-                    index += end - start;
-                    let start_converted = U::try_from(start).unwrap();
-                    let end_converted = U::try_from(end).unwrap();
-                    next = EncodePart {
-                        len: len_converted,
-                        encode_type: EncodeType::Part(start_converted, end_converted),
-                    };
-                    len += end - start;
-                }
-                // If no substring was found, we just save the next byte
-                // and try again on the remaining
-                None => {
-                    next = EncodePart {
-                        len: len_converted,
-                        encode_type: EncodeType::Byte(base_bytes[index]),
-                    };
-                    index += 1;
-                    len += 1;
-                }
+            let (start, end) = suffix_tree
+                .longest_substring(&base_bytes[index..])
+                .expect("Reference string did not contain substring");
+            index += end - start;
+            let start_converted = U::try_from(start).unwrap();
+            let end_converted = U::try_from(end).unwrap();
+            let next = EncodePart {
+                len: len_converted,
+                range: (start_converted, end_converted),
             };
+            len += end - start;
             encoded_string_list.push(next);
         }
         encoded_string_list.shrink_to_fit();
@@ -155,15 +159,10 @@ where
         let mut string_parts = vec![];
 
         for part in encoded_string {
-            let mut c = match part.encode_type {
-                EncodeType::Part(start, end) => {
-                    let start_as_u = start.try_into().unwrap();
-                    let end_as_u = end.try_into().unwrap();
-
-                    encoded_data.base_data[start_as_u..end_as_u].to_vec()
-                }
-                EncodeType::Byte(c) => vec![c],
-            };
+            let (start, end) = part.range;
+            let start_as_u = start.try_into().unwrap();
+            let end_as_u = end.try_into().unwrap();
+            let mut c = encoded_data.base_data[start_as_u..end_as_u].to_vec();
             string_parts.append(&mut c);
         }
 
@@ -218,25 +217,18 @@ where
     };
 
     let encode_part = encoded_string[index];
-    match encode_part.encode_type {
-        // The x'th byte is found via the difference in the
-        // length of the Part and the requested x, and is
-        // then found from the reference string by adding
-        // start to it.
-        EncodeType::Part(start, _) => {
-            let len_usize = encode_part.len.try_into().unwrap();
-            let start_usize = start.try_into().unwrap();
-            let pos = start_usize + (x_usize - len_usize);
-            rlt.base_data[pos]
-        }
-        EncodeType::Byte(byte) => byte,
-    }
+    let (start, _) = encode_part.range;
+
+    let len_usize = encode_part.len.try_into().unwrap();
+    let start_usize = start.try_into().unwrap();
+    let pos = start_usize + (x_usize - len_usize);
+    rlt.base_data[pos]
 }
 
 // Priority list:
 // 1. Make the Relative Lempel Ziv (RLZ) ✓
 // 2. Verify (Property-based testing) ✓
-// 3. Benchmark (both time and compression rate)
+// 3. Benchmark (both time and compression rate) - not making this automated, but rather from the CLI part. Could include an option that would test a predetermined amount of files and output all at once
 
 // Improvements
 // 2. If the alphabet is <= 255 letters, is it possible to map the letters into a single byte value, rather than taking multiple bytes?

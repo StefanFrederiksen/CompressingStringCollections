@@ -70,5 +70,15 @@ fn main() -> Result<()> {
         HumanDuration(elapsed_time)
     );
 
+    let stopwatch = Instant::now();
+    let _ = encoded.decode();
+    let decompressed_time = stopwatch.elapsed();
+
+    println!(
+        "Decompression time took {:?}",
+        // HumanDuration(decompressed_time)
+        decompressed_time
+    );
+
     Ok(())
 }
