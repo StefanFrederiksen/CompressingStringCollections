@@ -31,6 +31,10 @@ impl SuffixTree {
         internal_to_suffix_tree(s)
     }
 
+    pub fn new_bytes(s: &[u8]) -> Self {
+        internal_to_suffix_tree_bytes(s)
+    }
+
     pub fn string(&self) -> &str {
         &self.raw_string
     }
@@ -116,6 +120,11 @@ impl fmt::Debug for SuffixTree {
 }
 
 fn internal_to_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
+    let bytes = s.as_ref().as_bytes();
+    internal_to_suffix_tree_bytes(bytes)
+}
+
+fn internal_to_suffix_tree_bytes(s: &[u8]) -> SuffixTree {
     // Mutable global end, only possible via
     // the Cell container.
     let global_end = Rc::new(Cell::new(0));
@@ -133,15 +142,13 @@ fn internal_to_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
     // end of this list. This ensures a unique
     // last byte to finish up the suffix tree.
     let mut bytes_and_sep = s
-        .as_ref()
-        .as_bytes()
         .into_iter()
         .map(|&b| LabelData::new(b))
         .collect::<Vec<_>>();
     bytes_and_sep.push(LabelData::Sep);
 
     let mut suffix_tree = SuffixTree {
-        raw_string: String::from(s.as_ref()),
+        raw_string: String::from_utf8(s.to_vec()).unwrap(),
         nodes: vec![],
         string: vec![],
     };
@@ -506,7 +513,7 @@ mod tests {
     // There are str.len() + 1 leaves since the
     // separator is also added as a leaf from the root.
     #[quickcheck]
-    fn amount_of_leaves_is_len_plus_one(s: String) -> bool {
+    fn quickcheck_amount_of_leaves_is_len_plus_one(s: String) -> bool {
         SuffixTree::new(&s)
             .nodes
             .iter()
@@ -516,7 +523,7 @@ mod tests {
     }
 
     #[quickcheck]
-    fn contains_all_suffixes(s: String) -> bool {
+    fn quickcheck_contains_all_suffixes(s: String) -> bool {
         let st = SuffixTree::new(&s);
         for i in 0..s.len() {
             if !st.contains_suffix(&s.as_bytes()[i..]) {
@@ -527,7 +534,7 @@ mod tests {
     }
 
     #[quickcheck]
-    fn every_internal_node_has_at_least_two_children(s: String) -> bool {
+    fn quickcheck_every_internal_node_has_at_least_two_children(s: String) -> bool {
         SuffixTree::new(&s)
             .nodes
             .iter()

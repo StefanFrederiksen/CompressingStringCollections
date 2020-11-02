@@ -53,7 +53,7 @@ where
         internal_decode(self)
     }
 
-    pub fn memory_footprint(&self) -> usize {
+    pub fn memory_footprint(&self) -> (usize, usize) {
         internal_memory_footprint(self)
     }
 
@@ -68,6 +68,8 @@ where
 // impl Serialize for RelativeLempelZiv { }
 
 // Todo: Find ways to improve the base string finding
+// Todo: Change this to bytes, since that simplifies
+// the amount of chars needed.
 fn base_string<T: AsRef<str>>(strings: &[T]) -> String {
     // Select suitable base string
     let base_string = strings[0].as_ref();
@@ -172,16 +174,44 @@ where
     data
 }
 
-fn internal_memory_footprint<U: Copy>(encoded: &RelativeLempelZiv<U>) -> usize {
-    let mut size = 0;
-
+fn internal_memory_footprint<U: Copy>(encoded: &RelativeLempelZiv<U>) -> (usize, usize) {
     // "base_data" size
-    size += internal_memory_single_list(&encoded.base_data);
+    let base_data_size = internal_memory_single_list(&encoded.base_data);
 
     // "data" size (two-dimensional vector)
-    size += internal_memory_double_list(&encoded.data);
+    let data_size = internal_memory_double_list(&encoded.data);
 
-    size
+    // Todo: Debug info
+    // println!("Looking into factorization data sizes...");
+    // println!("Sequences: {}", encoded.data.len());
+    // println!(
+    //     "Size of 1 factorization: {}",
+    //     mem::size_of::<EncodePart<u32>>(),
+    // );
+    // println!(
+    //     "Factorizations: {}",
+    //     encoded.data.iter().map(|v| v.len()).sum::<usize>()
+    // );
+    // println!(
+    //     "Minimum factorization: {}",
+    //     encoded.data.iter().map(|v| v.len()).min().unwrap_or(0)
+    // );
+    // println!(
+    //     "Maximum factorization: {}",
+    //     encoded.data.iter().map(|v| v.len()).max().unwrap_or(0)
+    // );
+
+    // fn mean(list: &[usize]) -> f64 {
+    //     let sum: usize = Iterator::sum(list.iter());
+    //     sum as f64 / (list.len() as f64)
+    // }
+    // println!(
+    //     "Average factorization: {}",
+    //     mean(&encoded.data.iter().map(|v| v.len()).collect::<Vec<_>>())
+    // );
+
+    // Return
+    (base_data_size, data_size)
 }
 
 fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
@@ -240,7 +270,7 @@ extern crate quickcheck_macros;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quickcheck::{quickcheck, Arbitrary, Gen};
+    use quickcheck::{quickcheck, TestResult};
     use rand::Rng;
 
     #[test]
@@ -264,49 +294,36 @@ mod tests {
         assert_eq!(b"n"[0], encoded.random_access(2, 10));
     }
 
-    // Quickcheck does not yet allow randomly generating test data
-    // for arrays, and seems like they won't until const generics
-    // are added (if even then).
-    // https://github.com/BurntSushi/quickcheck/issues/187
-    // Workaround seems to be to make own array type, and
-    // manually implement Arbitrary trait for it.
-    #[derive(Debug, Clone)]
-    struct ArbArray {
-        strings: Vec<String>,
-    }
-
-    impl Arbitrary for ArbArray {
-        fn arbitrary<G: Gen>(g: &mut G) -> ArbArray {
-            // Randomly select size of array [1, 1000)
-            let mut rng = rand::thread_rng();
-            let size = rng.gen_range(1, 1000);
-            let mut strings = Vec::with_capacity(size);
-            for _ in 0..size {
-                strings.push(String::arbitrary(g));
-            }
-            ArbArray { strings }
+    #[quickcheck]
+    fn quickcheck_encode_decode(xs: Vec<String>) -> TestResult {
+        // No point in encoding an empty list, so we discard those
+        // test inputs
+        if xs.len() == 0 {
+            return TestResult::discard();
         }
+        let res = xs == RelativeLempelZiv::<u32>::encode(&xs).decode();
+        TestResult::from_bool(res)
     }
 
     #[quickcheck]
-    fn quickcheck_encode_decode(arr: ArbArray) -> bool {
-        arr.strings == RelativeLempelZiv::<u32>::encode(&arr.strings).decode()
-    }
+    fn quickcheck_random_access(xs: Vec<String>) -> TestResult {
+        if xs.len() == 0 {
+            return TestResult::discard();
+        }
 
-    #[quickcheck]
-    fn quickcheck_random_access(arr: ArbArray) -> bool {
         let mut rng = rand::thread_rng();
-        let index = rng.gen_range(0, arr.strings.len());
+        let index = rng.gen_range(0, xs.len());
 
         // If the chosen string is an empty string, it
         // has no bytes to validate against, so we skip it
-        if arr.strings[index].len() == 0 {
-            return true;
+        if xs[index].len() == 0 {
+            return TestResult::discard();
         }
 
-        let xth = rng.gen_range(0, arr.strings[index].len());
-        let encoded = RelativeLempelZiv::<usize>::encode(&arr.strings);
+        let xth = rng.gen_range(0, xs[index].len());
+        let encoded = RelativeLempelZiv::<usize>::encode(&xs);
 
-        arr.strings[index].as_bytes()[xth] == encoded.random_access(index, xth)
+        let res = xs[index].as_bytes()[xth] == encoded.random_access(index, xth);
+        TestResult::from_bool(res)
     }
 }
