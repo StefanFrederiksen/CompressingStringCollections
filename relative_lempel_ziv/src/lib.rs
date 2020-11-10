@@ -1,4 +1,5 @@
 // Relative Lempel Ziv Implementation
+// use std::cmp;
 use std::cmp::Ord;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
@@ -7,8 +8,7 @@ use std::mem;
 use suffix_tree::SuffixTree;
 
 // For showing output progress to the cli
-use console::style;
-use indicatif::ProgressBar;
+use indicatif::{ProgressBar, ProgressStyle};
 
 #[derive(Debug, Clone, Copy)]
 pub struct EncodePart<U> {
@@ -29,24 +29,68 @@ pub struct RelativeLempelZiv<U> {
     pub data: Vec<EncodedString<U>>,
 }
 
+// Todo: Debugging
+// impl<U> fmt::Debug for RelativeLempelZiv<U>
+// where
+//     U: fmt::Display,
+// {
+//     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+//         // fn fmt_inner(f: &mut fmt::Formatter, s: usize, e: &Vec<EncodedString<U>>) -> fmt::Result {
+//         //     writeln!(f, "{}", s)
+//         // }
+//         // Only output the first 5 data strings...
+//         fn fmt_inner<U>(e: &Vec<EncodePart<U>>) -> String
+//         where
+//             U: fmt::Display,
+//         {
+//             e.iter()
+//                 .map(|v| format!("({}, {})", v.range.0, v.range.1))
+//                 .collect::<Vec<_>>()
+//                 .join("")
+//         }
+
+//         writeln!(f, "Data length: {}", self.data.len());
+
+//         for i in self.data.iter().take(5) {
+//             writeln!(f, "{}, {}", i.len(), fmt_inner(&i))?;
+//         }
+
+//         // for _ in 0..cmp::min(5, self.data.len()) {
+//         // }
+
+//         Ok(())
+//     }
+// }
+
 impl<U> RelativeLempelZiv<U>
 where
     U: Copy + Ord + TryFrom<usize> + TryInto<usize>,
     <U as TryFrom<usize>>::Error: fmt::Debug,
     <U as TryInto<usize>>::Error: fmt::Debug,
 {
-    pub fn encode<T: AsRef<str>>(strings: &[T]) -> Self {
-        eprintln!("{} Finding base string...", style("[1/3]").bold().dim());
-        let base_string = base_string(&strings);
+    pub fn encode<T: AsRef<str>>(strings: &[T], n: Option<usize>) -> Self {
+        let spinner_style = ProgressStyle::default_spinner()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+            .template("{spinner} {wide_msg}");
 
-        eprintln!(
-            "{} Creating suffix tree from base string...",
-            style("[2/3]").bold().dim()
-        );
+        let pb = ProgressBar::new(1);
+        pb.set_style(spinner_style);
+        pb.set_message("Finding base string...");
+        // eprintln!("{} Finding base string...", style("[1/3]").bold().dim());
+        let base_string = base_string(&strings, n);
+
+        // eprintln!(
+        //     "{} Creating suffix tree from base string...",
+        //     style("[2/3]").bold().dim()
+        // );
+        pb.set_message("Creating suffix tree from base string...");
         let st = create_suffix_tree(base_string);
 
-        eprintln!("{} Encoding...", style("[3/3]").bold().dim());
-        encode_parts(strings, &st)
+        // eprintln!("{} Encoding...", style("[3/3]").bold().dim());
+        pb.set_message("Encoding...");
+        let res = encode_parts(strings, &st);
+        pb.finish_and_clear();
+        res
     }
 
     pub fn decode(&self) -> Vec<String> {
@@ -70,9 +114,14 @@ where
 // Todo: Find ways to improve the base string finding
 // Todo: Change this to bytes, since that simplifies
 // the amount of chars needed.
-fn base_string<T: AsRef<str>>(strings: &[T]) -> String {
+fn base_string<T: AsRef<str>>(strings: &[T], n: Option<usize>) -> String {
     // Select suitable base string
-    let base_string = strings[0].as_ref();
+    let base_string = strings[n.unwrap_or(0)].as_ref();
+    // For now assume that reference string contains all chars
+    // If this breaks, just ensure ACGTN are there...
+    let mut s = String::from(base_string);
+    s.push_str("ACGTN");
+    return s;
 
     // Create hash of all current characters
     let mut found_chars = HashSet::new();
@@ -277,7 +326,7 @@ mod tests {
     fn basic() {
         let test_data = vec!["banana", "anaban", "aaa", "nananananabananana"];
         println!("Original: {:?}", test_data);
-        let encoded = RelativeLempelZiv::<u8>::encode(&test_data);
+        let encoded = RelativeLempelZiv::<u8>::encode(&test_data, None);
         println!("Encoded: {:?}", encoded);
 
         let decoded = encoded.decode();
@@ -287,7 +336,7 @@ mod tests {
     #[test]
     fn random_access() {
         let test_data = vec!["banana", "ananan", "nananananananv"];
-        let encoded = RelativeLempelZiv::<u8>::encode(&test_data);
+        let encoded = RelativeLempelZiv::<u8>::encode(&test_data, None);
 
         assert_eq!(b"a"[0], encoded.random_access(1, 0));
         assert_eq!(b"v"[0], encoded.random_access(2, 13));
@@ -301,7 +350,7 @@ mod tests {
         if xs.len() == 0 {
             return TestResult::discard();
         }
-        let res = xs == RelativeLempelZiv::<u32>::encode(&xs).decode();
+        let res = xs == RelativeLempelZiv::<u32>::encode(&xs, None).decode();
         TestResult::from_bool(res)
     }
 
@@ -321,7 +370,7 @@ mod tests {
         }
 
         let xth = rng.gen_range(0, xs[index].len());
-        let encoded = RelativeLempelZiv::<usize>::encode(&xs);
+        let encoded = RelativeLempelZiv::<usize>::encode(&xs, None);
 
         let res = xs[index].as_bytes()[xth] == encoded.random_access(index, xth);
         TestResult::from_bool(res)

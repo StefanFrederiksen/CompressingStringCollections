@@ -1,4 +1,8 @@
+#[macro_use]
+extern crate log;
+
 use relative_lempel_ziv::RelativeLempelZiv;
+use simplelog::*;
 use std::fs;
 use std::fs::File;
 use std::io::prelude::*;
@@ -34,10 +38,14 @@ struct CliInput {
 fn main() -> Result<()> {
     let args = CliInput::from_args();
 
+    init_logging();
+
     let strings: Vec<String>;
     let total_size;
 
     if !args.is_dir {
+        trace!("Loading single file into memory");
+
         let file = File::open(&args.path)
             .with_context(|| format!("Could not read file `{}`", args.path.display()))?;
         let file_metadata = file.metadata();
@@ -52,6 +60,8 @@ fn main() -> Result<()> {
             Err(_) => strings.iter().fold(0, |acc, l| acc + l.len() as u64),
         };
     } else {
+        trace!("Loading directory files into memory");
+
         let dir = fs::read_dir(&args.path)
             .with_context(|| format!("Could not read directory `{}`", args.path.display()))?;
 
@@ -75,20 +85,48 @@ fn main() -> Result<()> {
         total_size = size;
     }
 
-    // Only times the time it takes to encode the data
-    let stopwatch = Instant::now();
-    let encoded = RelativeLempelZiv::<u32>::encode(&strings);
-    let elapsed_time = stopwatch.elapsed();
+    // Save best reference string
+    let mut best_i = 0;
+    let mut best_cr = f64::MAX;
 
-    let memory_size = encoded.memory_footprint();
+    trace!("Trying ALL the reference strings!");
+    for i in 125..strings.len() {
+        // Only times the time it takes to encode the data
+        trace!("Reference string {}/{}", i, strings.len());
 
-    print_compression_data(args.path.display(), memory_size, total_size, elapsed_time);
+        let stopwatch = Instant::now();
+        let encoded = RelativeLempelZiv::<u32>::encode(&strings, Some(i));
+        let elapsed_time = stopwatch.elapsed();
 
-    let stopwatch = Instant::now();
-    let _ = encoded.decode();
-    let decompressed_time = stopwatch.elapsed();
+        let memory_size = encoded.memory_footprint();
 
-    print_decompression_timme(decompressed_time);
+        let compressed = memory_size.0 + memory_size.1;
+        let compressed_rate = compressed as f64 / total_size as f64;
+        if compressed_rate < best_cr {
+            best_i = i;
+            best_cr = compressed_rate;
+
+            info!("New best cr! #{} {:.2}", best_i, best_cr);
+        }
+
+        print_compression_data(args.path.display(), memory_size, total_size, elapsed_time);
+
+        // Todo: Debugging
+        // println!("DEBUGGING RELATIVE COMPRESSION!");
+        // let s = format!("{:#?}", encoded);
+        // fs::write("Test.txt", s)?;
+
+        // let stopwatch = Instant::now();
+        // let _ = encoded.decode();
+        // let decompressed_time = stopwatch.elapsed();
+
+        // print_decompression_timme(decompressed_time);
+    }
+
+    info!(
+        "Best reference string was #{} with a rate of {:.2}",
+        best_i, best_cr
+    );
 
     Ok(())
 }
@@ -106,7 +144,7 @@ fn print_compression_data(path: Display, memory: (usize, usize), raw_size: u64, 
         }
     };
 
-    println!(
+    info!(
         "Compression rate of `{}`: {:.2} ({} compressed / {} raw), taking {:?}",
         path,
         styled_compression_rate,
@@ -114,10 +152,24 @@ fn print_compression_data(path: Display, memory: (usize, usize), raw_size: u64, 
         HumanBytes(raw_size as u64),
         time
     );
-    println!("Reference sequence: {}", HumanBytes(ref_data_size as u64));
-    println!("Data size: {}", HumanBytes(data_size as u64));
+    trace!("Reference sequence: {}", HumanBytes(ref_data_size as u64));
+    trace!("Data size: {}", HumanBytes(data_size as u64));
 }
 
-fn print_decompression_timme(time: Duration) {
-    println!("Decompression time took {:?}", time);
+// fn print_decompression_timme(time: Duration) {
+//     println!("Decompression time took {:?}", time);
+// }
+
+fn init_logging() {
+    CombinedLogger::init(vec![
+        TermLogger::new(LevelFilter::Trace, Config::default(), TerminalMode::Mixed),
+        WriteLogger::new(
+            LevelFilter::Trace,
+            Config::default(),
+            File::create("rlz.log").unwrap(),
+        ),
+    ])
+    .unwrap();
+
+    info!("Loggers initialized.");
 }
