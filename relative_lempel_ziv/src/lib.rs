@@ -1,5 +1,4 @@
 // Relative Lempel Ziv Implementation
-// use std::cmp;
 use std::cmp::Ord;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
@@ -9,6 +8,10 @@ use suffix_tree::SuffixTree;
 
 // For showing output progress to the cli
 use indicatif::{ProgressBar, ProgressStyle};
+
+// For debug
+mod analysis;
+use analysis::*;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EncodePart<U> {
@@ -68,6 +71,28 @@ where
     <U as TryFrom<usize>>::Error: fmt::Debug,
     <U as TryInto<usize>>::Error: fmt::Debug,
 {
+    pub fn encode_analysis<T: AsRef<str>>(
+        data: &[(T, T)],
+        n: Option<usize>,
+    ) -> (Self, Vec<Analysis>) {
+        let strings: Vec<&str> = data.iter().map(|t| t.0.as_ref()).collect();
+        let names: Vec<&str> = data.iter().map(|t| t.1.as_ref()).collect();
+        let base_string = base_string(&strings, n);
+        let st = create_suffix_tree(base_string);
+        let rlz = encode_parts(&strings, &st);
+
+        let mut a_vec = Vec::with_capacity(strings.len());
+        for (i, (encoded, name)) in rlz.data.iter().zip(names.iter()).enumerate() {
+            let len = encoded.len();
+            let c_size = internal_memory_single_list(&encoded);
+            let r_size = strings[i].len();
+            let analysis = Analysis::new(len, c_size, r_size, name);
+            a_vec.push(analysis);
+        }
+
+        (rlz, a_vec)
+    }
+
     pub fn encode<T: AsRef<str>>(strings: &[T], n: Option<usize>) -> Self {
         let spinner_style = ProgressStyle::default_spinner()
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
@@ -97,13 +122,13 @@ where
         internal_decode(self)
     }
 
-    pub fn memory_footprint(&self) -> (usize, usize) {
-        internal_memory_footprint(self)
-    }
-
     // Gets the x'th byte from the i'th string
     pub fn random_access(&self, i: U, x: U) -> u8 {
         internal_random_access(self, i, x)
+    }
+
+    pub fn memory_footprint(&self) -> (usize, usize) {
+        internal_memory_footprint(self)
     }
 }
 
@@ -374,5 +399,10 @@ mod tests {
 
         let res = xs[index].as_bytes()[xth] == encoded.random_access(index, xth);
         TestResult::from_bool(res)
+    }
+
+    #[test]
+    fn testing() {
+        println!("Analysis size: {}", mem::size_of::<Analysis>());
     }
 }

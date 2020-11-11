@@ -32,15 +32,18 @@ struct CliInput {
     /// INCOMPLETE: Output compressed data to file (needs serde Serialize trait first)
     #[structopt(short = "o", long = "output")]
     _output: Option<PathBuf>,
+
+    /// If you want to manually tell the cli which reference string to take
+    #[structopt(short = "i", default_value = "106")]
+    i: usize,
 }
 
 // Example input: "../test_data/dna.50MB"
 fn main() -> Result<()> {
     let args = CliInput::from_args();
-
     init_logging();
 
-    let strings: Vec<String>;
+    let strings: Vec<(String, String)>;
     let total_size;
 
     if !args.is_dir {
@@ -51,13 +54,16 @@ fn main() -> Result<()> {
         let file_metadata = file.metadata();
 
         let buf_reader = BufReader::new(file);
-        strings = buf_reader.lines().map(|l| l.unwrap()).collect();
+        strings = buf_reader
+            .lines()
+            .map(|l| (l.unwrap(), String::new()))
+            .collect();
 
         // Uses the file's metadata for the file size if it exists, otherwise it has to
         // calculate this using the len of every line.
         total_size = match file_metadata {
             Ok(metadata) => metadata.len(),
-            Err(_) => strings.iter().fold(0, |acc, l| acc + l.len() as u64),
+            Err(_) => strings.iter().fold(0, |acc, l| acc + l.0.len() as u64),
         };
     } else {
         trace!("Loading directory files into memory");
@@ -71,6 +77,7 @@ fn main() -> Result<()> {
             let path = dir_entry?.path();
             let file = File::open(&path)
                 .with_context(|| format!("Could not read file `{}`", path.display()))?;
+            let file_name = path.file_name().unwrap();
             let file_metadata = file.metadata();
             let file_string = fs::read_to_string(&path)?.replace(&['\n', '\r'][..], "");
 
@@ -78,55 +85,38 @@ fn main() -> Result<()> {
                 Ok(metadata) => metadata.len(),
                 Err(_) => file_string.len() as u64,
             };
-            tmp_strings.push(file_string);
+            tmp_strings.push((file_string, String::from(file_name.to_str().unwrap())));
         }
 
         strings = tmp_strings;
         total_size = size;
     }
 
-    // Save best reference string
-    let mut best_i = 0;
-    let mut best_cr = f64::MAX;
+    let stopwatch = Instant::now();
+    let (encoded, analysis) = RelativeLempelZiv::<u32>::encode_analysis(&strings, Some(args.i));
+    let elapsed_time = stopwatch.elapsed();
 
-    trace!("Trying ALL the reference strings!");
-    for i in 125..strings.len() {
-        // Only times the time it takes to encode the data
-        trace!("Reference string {}/{}", i, strings.len());
+    let memory_size = encoded.memory_footprint();
 
-        let stopwatch = Instant::now();
-        let encoded = RelativeLempelZiv::<u32>::encode(&strings, Some(i));
-        let elapsed_time = stopwatch.elapsed();
+    print_compression_data(args.path.display(), memory_size, total_size, elapsed_time);
 
-        let memory_size = encoded.memory_footprint();
+    let stopwatch = Instant::now();
+    let _ = encoded.decode();
+    let decompressed_time = stopwatch.elapsed();
+    print_decompression_time(decompressed_time);
 
-        let compressed = memory_size.0 + memory_size.1;
-        let compressed_rate = compressed as f64 / total_size as f64;
-        if compressed_rate < best_cr {
-            best_i = i;
-            best_cr = compressed_rate;
-
-            info!("New best cr! #{} {:.2}", best_i, best_cr);
-        }
-
-        print_compression_data(args.path.display(), memory_size, total_size, elapsed_time);
-
-        // Todo: Debugging
-        // println!("DEBUGGING RELATIVE COMPRESSION!");
-        // let s = format!("{:#?}", encoded);
-        // fs::write("Test.txt", s)?;
-
-        // let stopwatch = Instant::now();
-        // let _ = encoded.decode();
-        // let decompressed_time = stopwatch.elapsed();
-
-        // print_decompression_timme(decompressed_time);
+    // Analysis time
+    // let mut sorted_analysis = analysis.iter().collect::<Vec<_>>();
+    // sorted_analysis.sort_unstable_by(|a, b| {
+    //     a.compressed_rate()
+    //         .partial_cmp(&b.compressed_rate())
+    //         .unwrap()
+    // });
+    info!("Analysis data size: {}", analysis.len());
+    let mut file = File::create("analysis.txt")?;
+    for s in analysis.iter() {
+        file.write_all(format!("{}\n", s).as_bytes())?;
     }
-
-    info!(
-        "Best reference string was #{} with a rate of {:.2}",
-        best_i, best_cr
-    );
 
     Ok(())
 }
@@ -156,9 +146,9 @@ fn print_compression_data(path: Display, memory: (usize, usize), raw_size: u64, 
     trace!("Data size: {}", HumanBytes(data_size as u64));
 }
 
-// fn print_decompression_timme(time: Duration) {
-//     println!("Decompression time took {:?}", time);
-// }
+fn print_decompression_time(time: Duration) {
+    info!("Decompression time took {:?}", time);
+}
 
 fn init_logging() {
     CombinedLogger::init(vec![
