@@ -33,15 +33,17 @@ struct CliInput {
     #[structopt(short = "o", long = "output")]
     _output: Option<PathBuf>,
 
-    /// If you want to manually tell the cli which reference string to take
+    /// If you want to manually tell the cli which reference strings to take
     #[structopt(short = "i", default_value = "106")]
-    i: usize,
+    i: Vec<usize>,
 }
 
 // Example input: "../test_data/dna.50MB"
 fn main() -> Result<()> {
     let args = CliInput::from_args();
     init_logging();
+
+    info!("Using {:?} as reference strings", &args.i);
 
     let strings: Vec<(String, String)>;
     let total_size;

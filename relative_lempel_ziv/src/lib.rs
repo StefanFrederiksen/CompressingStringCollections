@@ -73,7 +73,7 @@ where
 {
     pub fn encode_analysis<T: AsRef<str>>(
         data: &[(T, T)],
-        n: Option<usize>,
+        n: Option<Vec<usize>>,
     ) -> (Self, Vec<Analysis>) {
         let strings: Vec<&str> = data.iter().map(|t| t.0.as_ref()).collect();
         let names: Vec<&str> = data.iter().map(|t| t.1.as_ref()).collect();
@@ -93,7 +93,7 @@ where
         (rlz, a_vec)
     }
 
-    pub fn encode<T: AsRef<str>>(strings: &[T], n: Option<usize>) -> Self {
+    pub fn encode<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> Self {
         let spinner_style = ProgressStyle::default_spinner()
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
             .template("{spinner} {wide_msg}");
@@ -139,9 +139,15 @@ where
 // Todo: Find ways to improve the base string finding
 // Todo: Change this to bytes, since that simplifies
 // the amount of chars needed.
-fn base_string<T: AsRef<str>>(strings: &[T], n: Option<usize>) -> String {
+fn base_string<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> String {
     // Select suitable base string
-    let base_string = strings[n.unwrap_or(0)].as_ref();
+    let base_string = n
+        .unwrap_or(vec![0])
+        .iter()
+        .map(|&x| strings[x].as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    // let base_string = strings[n.unwrap_or(0)].as_ref();
     // For now assume that reference string contains all chars
     // If this breaks, just ensure ACGTN are there...
     let mut s = String::from(base_string);
