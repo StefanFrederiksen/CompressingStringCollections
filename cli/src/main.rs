@@ -103,6 +103,8 @@ fn main() -> Result<()> {
     print_compression_data(args.path.display(), memory_size, total_size, elapsed_time);
 
     let stopwatch = Instant::now();
+    // The `let _` is needed for the compiler to not throw
+    // away this computation since it is not "used"
     let _ = encoded.decode();
     let decompressed_time = stopwatch.elapsed();
     print_decompression_time(decompressed_time);

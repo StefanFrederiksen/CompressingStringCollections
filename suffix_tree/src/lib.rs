@@ -5,10 +5,10 @@
 // https://www.geeksforgeeks.org/ukkonens-suffix-tree-construction-part-6/
 // Archived via web.archive.org on 14/09/2020
 
-use std::cell::Cell;
 use std::fmt;
 use std::iter;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 // Declaring the label_data and node modules without explicitly having a
 // mod.rs file in types/mod.rs or a types.rs in src, essentially saving
@@ -41,7 +41,7 @@ impl SuffixTree {
 
     // Gets the byte label going into the node
     pub fn label_of_node(&self, node: &Node) -> &[LabelData] {
-        &self.string[node.start..node.end.get()]
+        &self.string[node.start..node.end()]
     }
 
     pub fn label_of_node_formatted(&self, node: &Node) -> String {
@@ -102,7 +102,7 @@ impl fmt::Debug for SuffixTree {
                     &st.label_of_node_formatted(node),
                     node.suffix_index.unwrap(),
                     node.start,
-                    node.end.get(),
+                    node.end(),
                     &st.raw_string[node.suffix_range()]
                 )?;
             }
@@ -127,7 +127,7 @@ fn internal_to_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
 fn internal_to_suffix_tree_bytes(s: &[u8]) -> SuffixTree {
     // Mutable global end, only possible via
     // the Cell container.
-    let global_end = Rc::new(Cell::new(0));
+    let global_end = Arc::new(AtomicUsize::new(0));
     // Root always has id 0, no parent, start is 0 and
     // a reference to the global end
     let root = Node::new(0, None, None, 0, &global_end);
@@ -186,7 +186,8 @@ fn internal_to_suffix_tree_bytes(s: &[u8]) -> SuffixTree {
     for (i, &b) in bytes_and_sep.iter().enumerate() {
         // Update global_end and increment remaining suffix
         // Extension rule 1 for global_end
-        global_end.set(global_end.get() + 1);
+        let old_val = global_end.load(Ordering::SeqCst);
+        global_end.store(old_val + 1, Ordering::SeqCst);
         remaining_suffix_count += 1;
 
         // Clear last new node
@@ -251,7 +252,7 @@ fn internal_to_suffix_tree_bytes(s: &[u8]) -> SuffixTree {
                 // New character is currently not in the label
                 // so will have to create a new internal node,
                 // and a new leaf node.
-                let split_end = Rc::new(Cell::new(nodes[next].start + active_length));
+                let split_end = Arc::new(AtomicUsize::new(nodes[next].start + active_length));
                 let mut split_node = Node::new(
                     nodes.len(),
                     nodes[next].parent,

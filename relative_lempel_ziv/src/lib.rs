@@ -1,9 +1,11 @@
 // Relative Lempel Ziv Implementation
+use rayon::prelude::*;
 use std::cmp::Ord;
 use std::collections::HashSet;
 use std::convert::{TryFrom, TryInto};
 use std::fmt;
 use std::mem;
+use std::sync::Mutex;
 use suffix_tree::SuffixTree;
 
 // For showing output progress to the cli
@@ -67,11 +69,11 @@ pub struct RelativeLempelZiv<U> {
 
 impl<U> RelativeLempelZiv<U>
 where
-    U: Copy + Ord + TryFrom<usize> + TryInto<usize>,
+    U: Copy + Ord + TryFrom<usize> + TryInto<usize> + Send,
     <U as TryFrom<usize>>::Error: fmt::Debug,
     <U as TryInto<usize>>::Error: fmt::Debug,
 {
-    pub fn encode_analysis<T: AsRef<str>>(
+    pub fn encode_analysis<T: AsRef<str> + Sync>(
         data: &[(T, T)],
         n: Option<Vec<usize>>,
     ) -> (Self, Vec<Analysis>) {
@@ -93,7 +95,7 @@ where
         (rlz, a_vec)
     }
 
-    pub fn encode<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> Self {
+    pub fn encode<T: AsRef<str> + Sync>(strings: &[T], n: Option<Vec<usize>>) -> Self {
         let spinner_style = ProgressStyle::default_spinner()
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
             .template("{spinner} {wide_msg}");
@@ -101,17 +103,11 @@ where
         let pb = ProgressBar::new(1);
         pb.set_style(spinner_style);
         pb.set_message("Finding base string...");
-        // eprintln!("{} Finding base string...", style("[1/3]").bold().dim());
         let base_string = base_string(&strings, n);
 
-        // eprintln!(
-        //     "{} Creating suffix tree from base string...",
-        //     style("[2/3]").bold().dim()
-        // );
         pb.set_message("Creating suffix tree from base string...");
         let st = create_suffix_tree(base_string);
 
-        // eprintln!("{} Encoding...", style("[3/3]").bold().dim());
         pb.set_message("Encoding...");
         let res = encode_parts(strings, &st);
         pb.finish_and_clear();
@@ -156,7 +152,7 @@ fn base_string<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> String {
 
     // Create hash of all current characters
     let mut found_chars = HashSet::new();
-    for c in base_string.chars() {
+    for c in s.chars() {
         found_chars.insert(c);
     }
 
@@ -171,8 +167,8 @@ fn base_string<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> String {
         }
     }
 
-    let mut return_string = String::with_capacity(base_string.len() + chars_to_add.len());
-    return_string.push_str(&base_string);
+    let mut return_string = String::with_capacity(s.len() + chars_to_add.len());
+    return_string.push_str(&s);
     for c in chars_to_add {
         return_string.push(c);
     }
@@ -184,17 +180,73 @@ fn create_suffix_tree<T: AsRef<str>>(s: T) -> SuffixTree {
     SuffixTree::new(s)
 }
 
+// fn encode_parts<U, T>(strings: &[T], suffix_tree: &SuffixTree) -> RelativeLempelZiv<U>
+// where
+//     U: TryFrom<usize>,
+//     <U as TryFrom<usize>>::Error: fmt::Debug,
+//     T: AsRef<str>,
+// {
+//     // For io::stderr output of progress
+//     let pb = ProgressBar::new(strings.len() as u64);
+
+//     let mut data = vec![];
+//     for s in strings {
+//         pb.inc(1);
+
+//         let mut encoded_string_list: Vec<EncodePart<U>> = vec![];
+//         let mut len = 0;
+
+//         let base_bytes = s.as_ref().as_bytes();
+//         let mut index = 0;
+//         while index < base_bytes.len() {
+//             let len_converted = U::try_from(len).unwrap();
+//             let (start, end) = suffix_tree
+//                 .longest_substring(&base_bytes[index..])
+//                 .expect("Reference string did not contain substring");
+//             index += end - start;
+//             let start_converted = U::try_from(start).unwrap();
+//             let end_converted = U::try_from(end).unwrap();
+//             let next = EncodePart {
+//                 len: len_converted,
+//                 range: (start_converted, end_converted),
+//             };
+//             len += end - start;
+//             encoded_string_list.push(next);
+//         }
+//         encoded_string_list.shrink_to_fit();
+//         data.push(encoded_string_list);
+//     }
+
+//     pb.finish_and_clear();
+
+//     data.shrink_to_fit();
+//     RelativeLempelZiv {
+//         base_data: suffix_tree.string().as_bytes().to_vec(),
+//         data,
+//     }
+// }
+
 fn encode_parts<U, T>(strings: &[T], suffix_tree: &SuffixTree) -> RelativeLempelZiv<U>
 where
-    U: TryFrom<usize>,
+    U: TryFrom<usize> + Send,
     <U as TryFrom<usize>>::Error: fmt::Debug,
-    T: AsRef<str>,
+    T: AsRef<str> + Sync,
 {
     // For io::stderr output of progress
     let pb = ProgressBar::new(strings.len() as u64);
 
-    let mut data = vec![];
-    for s in strings {
+    // Prep result list
+    // Need to insert all empty elements in the list, since
+    // with_capacity only ensures that the capacity is there,
+    // not that we can insert at position i in the vector.
+    let mut mutex_list = Vec::with_capacity(strings.len());
+    for _ in strings {
+        mutex_list.push(vec![]);
+    }
+
+    let data = Mutex::new(mutex_list);
+
+    strings.par_iter().enumerate().for_each(|(i, s)| {
         pb.inc(1);
 
         let mut encoded_string_list: Vec<EncodePart<U>> = vec![];
@@ -218,15 +270,17 @@ where
             encoded_string_list.push(next);
         }
         encoded_string_list.shrink_to_fit();
-        data.push(encoded_string_list);
-    }
+        let mut list = data.lock().unwrap();
+        list[i] = encoded_string_list;
+    });
 
     pb.finish_and_clear();
 
-    data.shrink_to_fit();
+    let mut list = data.into_inner().unwrap();
+    list.shrink_to_fit();
     RelativeLempelZiv {
         base_data: suffix_tree.string().as_bytes().to_vec(),
-        data,
+        data: list,
     }
 }
 
@@ -374,6 +428,10 @@ mod tests {
         assert_eq!(b"n"[0], encoded.random_access(2, 10));
     }
 
+    // If this test fails, just ensure that the part about
+    // the base string includes every character. This should
+    // ensure that this test passes, since it generates completely
+    // random strings.
     #[quickcheck]
     fn quickcheck_encode_decode(xs: Vec<String>) -> TestResult {
         // No point in encoding an empty list, so we discard those
@@ -381,6 +439,7 @@ mod tests {
         if xs.len() == 0 {
             return TestResult::discard();
         }
+
         let res = xs == RelativeLempelZiv::<u32>::encode(&xs, None).decode();
         TestResult::from_bool(res)
     }

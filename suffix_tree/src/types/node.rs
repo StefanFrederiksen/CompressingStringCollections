@@ -1,7 +1,7 @@
-use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 
 use super::label_data::LabelData;
 
@@ -25,7 +25,7 @@ pub struct Node {
   pub suffix_link: Option<NodeId>,
 
   pub start: usize,
-  pub end: Rc<Cell<usize>>,
+  pub end: Arc<AtomicUsize>,
 
   // The suffix index is where the suffix of the
   // node starts in the original string. Normally
@@ -44,7 +44,7 @@ impl Node {
     parent: Option<NodeId>,
     suffix_link: Option<NodeId>,
     start: usize,
-    global_end: &Rc<Cell<usize>>,
+    global_end: &Arc<AtomicUsize>,
   ) -> Self {
     Node {
       id,
@@ -52,9 +52,13 @@ impl Node {
       children: BTreeMap::new(),
       suffix_link,
       start,
-      end: Rc::clone(global_end),
+      end: Arc::clone(global_end),
       suffix_index: None,
     }
+  }
+
+  pub fn end(&self) -> usize {
+    self.end.load(Ordering::SeqCst)
   }
 
   pub fn has_child(&self, b: &LabelData) -> bool {
@@ -88,13 +92,13 @@ impl Node {
   }
 
   pub fn length(&self) -> usize {
-    self.end.get() - self.start
+    self.end() - self.start
   }
 
   pub fn suffix_range(&self) -> Range<usize> {
     // The leaf is an additional character, namely the
     // LabelData::Sep value, hence the subtraction.
     let subtraction = if self.is_leaf() { 1 } else { 0 };
-    self.suffix_index.unwrap()..self.end.get() - subtraction
+    self.suffix_index.unwrap()..self.end() - subtraction
   }
 }
