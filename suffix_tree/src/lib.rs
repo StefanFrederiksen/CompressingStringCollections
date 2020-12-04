@@ -186,8 +186,7 @@ fn internal_to_suffix_tree_bytes(s: &[u8]) -> SuffixTree {
     for (i, &b) in bytes_and_sep.iter().enumerate() {
         // Update global_end and increment remaining suffix
         // Extension rule 1 for global_end
-        let old_val = global_end.load(Ordering::SeqCst);
-        global_end.store(old_val + 1, Ordering::SeqCst);
+        global_end.fetch_add(1, Ordering::SeqCst);
         remaining_suffix_count += 1;
 
         // Clear last new node
