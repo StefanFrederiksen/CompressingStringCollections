@@ -1,4 +1,5 @@
 // Relative Lempel Ziv Implementation
+use rand::seq::SliceRandom;
 use rayon::prelude::*;
 use std::cmp::Ord;
 use std::collections::HashSet;
@@ -76,7 +77,7 @@ where
     pub fn encode_analysis<T: AsRef<str> + Sync>(
         data: &[(T, T)],
         n: Option<Vec<usize>>,
-    ) -> (Self, Vec<Analysis>) {
+    ) -> (Self, AnalysisResult) {
         let strings: Vec<&str> = data.iter().map(|t| t.0.as_ref()).collect();
         let names: Vec<&str> = data.iter().map(|t| t.1.as_ref()).collect();
         let base_string = base_string(&strings, n);
@@ -92,7 +93,8 @@ where
             a_vec.push(analysis);
         }
 
-        (rlz, a_vec)
+        let analysis_result = AnalysisResult::new(a_vec);
+        (rlz, analysis_result)
     }
 
     pub fn encode<T: AsRef<str> + Sync>(strings: &[T], n: Option<Vec<usize>>) -> Self {
@@ -114,6 +116,13 @@ where
         res
     }
 
+    pub fn encode_reference_merge<T>(strings: &[(T, T)]) -> Self
+    where
+        T: AsRef<str> + Sync + Eq,
+    {
+        encode_by_reference_merge(strings)
+    }
+
     pub fn decode(&self) -> Vec<String> {
         internal_decode(self)
     }
@@ -126,11 +135,91 @@ where
     pub fn memory_footprint(&self) -> (usize, usize) {
         internal_memory_footprint(self)
     }
+
+    pub fn uncompressed_size(&self) -> u64 {
+        // Need to decode first...
+        let decoded = self.decode();
+        internal_memory_string_list(&decoded)
+    }
+
+    // pub fn compressed_rate(&self) -> f64 {
+    //     let (d1, d2) = self.memory_footprint();
+    //     let total_size = d1 + d2;
+    //     total_size as f64 / self.uncompressed_size() as f64
+    // }
 }
 
-// Todo (nice to have): Implement serialize
-// https://serde.rs/impl-serialize.html
-// impl Serialize for RelativeLempelZiv { }
+fn base_string_by_name<T: AsRef<str> + Eq>(strings: &[(T, T)], names: &Vec<String>) -> String {
+    let mut ref_str = strings
+        .iter()
+        .filter(|(_, n)| names.contains(&String::from(n.as_ref())))
+        .map(|(s, _)| s.as_ref())
+        .collect::<Vec<_>>()
+        .join("");
+    ref_str.push_str("ACGTN");
+    ref_str
+}
+
+fn encode_by_reference_merge<U, T>(strings: &[(T, T)]) -> RelativeLempelZiv<U>
+where
+    U: Copy + Ord + TryFrom<usize> + TryInto<usize> + Send,
+    <U as TryFrom<usize>>::Error: fmt::Debug,
+    <U as TryInto<usize>>::Error: fmt::Debug,
+    T: AsRef<str> + Sync + Eq,
+{
+    let raw_strings: Vec<&str> = strings.iter().map(|t| t.0.as_ref()).collect();
+    let names: Vec<&str> = strings.iter().map(|t| t.1.as_ref()).collect();
+
+    let total_size = internal_memory_string_list(&raw_strings);
+
+    // Initially pick a random reference string
+    let mut reference_names: Vec<String> = Vec::new();
+
+    let initial_element = strings.choose(&mut rand::thread_rng()).unwrap();
+    reference_names.push(String::from(initial_element.1.as_ref()));
+
+    // Loop until best compression rate is found
+    let mut best_compression_rate = 1.0f64;
+    loop {
+        let base_string = base_string_by_name(strings, &reference_names);
+        let st = create_suffix_tree(base_string);
+        let rlz: RelativeLempelZiv<U> = encode_parts(&raw_strings, &st);
+
+        let mut a_vec = Vec::with_capacity(strings.len());
+        for (i, (encoded, name)) in rlz.data.iter().zip(names.iter()).enumerate() {
+            let len = encoded.len();
+            let c_size = internal_memory_single_list(&encoded);
+            let r_size = raw_strings[i].len();
+            let analysis = Analysis::new(len, c_size, r_size, name);
+            a_vec.push(analysis);
+        }
+
+        let analysis_result = AnalysisResult::new(a_vec);
+        let (d1, d2) = rlz.memory_footprint();
+        let compressed_rate = (d1 + d2) as f64 / total_size as f64;
+
+        if compressed_rate < best_compression_rate {
+            best_compression_rate = compressed_rate;
+
+            let worst_ref = String::from(analysis_result.worst_reference_string());
+            reference_names.push(worst_ref);
+        } else {
+            eprintln!(
+                "Returning best rate {} with the following strings: {:#?}",
+                best_compression_rate, reference_names
+            );
+            return rlz;
+        }
+        // (rlz, analysis_result)
+    }
+
+    // 1. Pick random reference string at first
+    // 2. Encode as usual
+    // 3. Find worst encoded other reference string and merge with previous
+    // 4. Encode with this instead
+    // 5. If performance was better, goto 3
+    // 6. If not, go with this.
+}
 
 // Todo: Find ways to improve the base string finding
 // Todo: Change this to bytes, since that simplifies
@@ -276,8 +365,7 @@ where
 
     pb.finish_and_clear();
 
-    let mut list = data.into_inner().unwrap();
-    list.shrink_to_fit();
+    let list = data.into_inner().unwrap();
     RelativeLempelZiv {
         base_data: suffix_tree.string().as_bytes().to_vec(),
         data: list,
@@ -305,6 +393,7 @@ where
         data.push(String::from_utf8(string_parts).unwrap());
     }
 
+    data.shrink_to_fit();
     data
 }
 
@@ -348,14 +437,6 @@ fn internal_memory_footprint<U: Copy>(encoded: &RelativeLempelZiv<U>) -> (usize,
     (base_data_size, data_size)
 }
 
-fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
-    v.capacity() * mem::size_of::<T>()
-}
-
-fn internal_memory_double_list<T: Copy>(vv: &Vec<Vec<T>>) -> usize {
-    vv.iter().map(|v| internal_memory_single_list(v)).sum()
-}
-
 fn internal_random_access<U>(rlt: &RelativeLempelZiv<U>, i: U, x: U) -> u8
 where
     U: Copy + Ord + TryInto<usize>,
@@ -389,13 +470,31 @@ where
     rlt.base_data[pos]
 }
 
-// Priority list:
-// 1. Make the Relative Lempel Ziv (RLZ) ✓
-// 2. Verify (Property-based testing) ✓
-// 3. Benchmark (both time and compression rate) - not making this automated, but rather from the CLI part. Could include an option that would test a predetermined amount of files and output all at once
+// --- Memory consumption functions ---
+// Computes the memory consumption of a slice of strings
+fn internal_memory_string_list<T: AsRef<str>>(v: &[T]) -> u64 {
+    v.iter().fold(0, |acc, s| acc + s.as_ref().len() as u64)
+}
 
-// Improvements
-// 2. If the alphabet is <= 255 letters, is it possible to map the letters into a single byte value, rather than taking multiple bytes?
+// Computes the memory consumption of a Vector of stack-allocated elements
+fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
+    v.capacity() * mem::size_of::<T>()
+}
+
+// Computes the memory consumption of a Vector of Vectors of stack-allocated elements
+fn internal_memory_double_list<T: Copy>(vv: &Vec<Vec<T>>) -> usize {
+    vv.iter().map(|v| internal_memory_single_list(v)).sum()
+}
+
+// fn total_size_strings<T: AsRef<str>>(strings: &[T]) -> u64 {
+//     internal_memory_string_list(&strings)
+// }
+
+// // Assumes the first element in the tuple is the data string
+// fn total_size_tuples<T: AsRef<str>>(strings: &[(T, T)]) -> u64 {
+//     let f = strings.iter().map(|t| t.0.as_ref()).collect::<Vec<_>>();
+//     internal_memory_string_list(&f)
+// }
 
 #[cfg(test)]
 #[macro_use(quickcheck)]

@@ -95,7 +95,8 @@ fn main() -> Result<()> {
     }
 
     let stopwatch = Instant::now();
-    let (encoded, analysis) = RelativeLempelZiv::<u32>::encode_analysis(&strings, Some(args.i));
+    // let (encoded, analysis) = RelativeLempelZiv::<u32>::encode_analysis(&strings, Some(args.i));
+    let encoded = RelativeLempelZiv::<u32>::encode_reference_merge(&strings);
     let elapsed_time = stopwatch.elapsed();
 
     let memory_size = encoded.memory_footprint();
@@ -109,18 +110,9 @@ fn main() -> Result<()> {
     let decompressed_time = stopwatch.elapsed();
     print_decompression_time(decompressed_time);
 
-    // Analysis time
-    // let mut sorted_analysis = analysis.iter().collect::<Vec<_>>();
-    // sorted_analysis.sort_unstable_by(|a, b| {
-    //     a.compressed_rate()
-    //         .partial_cmp(&b.compressed_rate())
-    //         .unwrap()
-    // });
-    info!("Analysis data size: {}", analysis.len());
-    let mut file = File::create("analysis.txt")?;
-    for s in analysis.iter() {
-        file.write_all(format!("{}\n", s).as_bytes())?;
-    }
+    // info!("Analysis data size: {}", analysis.list.len());
+    // let mut file = File::create("analysis.txt")?;
+    // file.write_all(format!("{}\n", analysis).as_bytes())?;
 
     Ok(())
 }

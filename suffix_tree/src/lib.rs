@@ -319,7 +319,7 @@ fn internal_to_suffix_tree_bytes(s: &[u8]) -> SuffixTree {
     nodes.shrink_to_fit();
     bytes_and_sep.shrink_to_fit();
 
-    // Move ownership of notes and the LabelData
+    // Move ownership of nodes and the LabelData
     suffix_tree.nodes = nodes;
     suffix_tree.string = bytes_and_sep;
 
