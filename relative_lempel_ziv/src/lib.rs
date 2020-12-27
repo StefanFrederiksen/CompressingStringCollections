@@ -180,10 +180,21 @@ where
 
     // Loop until best compression rate is found
     let mut best_compression_rate = 1.0f64;
+    let mut i = 0;
+    let mut best_rlz = None;
     loop {
-        let base_string = base_string_by_name(strings, &reference_names);
-        let st = create_suffix_tree(base_string);
-        let rlz: RelativeLempelZiv<U> = encode_parts(&raw_strings, &st);
+        i += 1;
+
+        // This scope is to uninitialize the base_string and st
+        // asap because we still do computation after, but they
+        // aren't needed for that. Thanks to Rust's borrowing
+        // system, they will be removed from memory after the
+        // scope ends.
+        let rlz: RelativeLempelZiv<U> = {
+            let base_string = base_string_by_name(strings, &reference_names);
+            let st = create_suffix_tree(base_string);
+            encode_parts(&raw_strings, &st)
+        };
 
         let mut a_vec = Vec::with_capacity(strings.len());
         for (i, (encoded, name)) in rlz.data.iter().zip(names.iter()).enumerate() {
@@ -199,16 +210,22 @@ where
         let compressed_rate = (d1 + d2) as f64 / total_size as f64;
 
         if compressed_rate < best_compression_rate {
+            eprintln!(
+                "{} < {} in the {}th iteration.",
+                compressed_rate, best_compression_rate, i
+            );
             best_compression_rate = compressed_rate;
 
             let worst_ref = String::from(analysis_result.worst_reference_string());
             reference_names.push(worst_ref);
+
+            best_rlz = Some(rlz);
         } else {
             eprintln!(
                 "Returning best rate {} with the following strings: {:#?}",
                 best_compression_rate, reference_names
             );
-            return rlz;
+            return best_rlz.expect("Tried to return without actually finding an RLZ");
         }
         // (rlz, analysis_result)
     }
