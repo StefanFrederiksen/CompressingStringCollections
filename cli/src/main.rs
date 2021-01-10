@@ -1,6 +1,7 @@
 #[macro_use]
 extern crate log;
 
+use relative_lempel_ziv::memory_usage::MemoryUsage;
 use relative_lempel_ziv::RelativeLempelZiv;
 use simplelog::*;
 use std::fs;
@@ -108,9 +109,9 @@ fn main() -> Result<()> {
     let encoded = RelativeLempelZiv::<u32>::encode_reference_merge(&strings, chars);
     let elapsed_time = stopwatch.elapsed();
 
-    let memory_size = encoded.memory_footprint();
+    let memory_size = encoded.memory_footprint(Some(total_size as usize));
 
-    print_compression_data(args.path.display(), memory_size, total_size, elapsed_time);
+    print_compression_data(args.path.display(), memory_size, elapsed_time);
 
     let stopwatch = Instant::now();
     // The `let _` is needed for the compiler to not throw
@@ -126,10 +127,9 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn print_compression_data(path: Display, memory: (usize, usize), raw_size: u64, time: Duration) {
-    let (ref_data_size, data_size) = memory;
-    let compressed_size = ref_data_size + data_size;
-    let compression_rate = (ref_data_size + data_size) as f64 / raw_size as f64;
+fn print_compression_data(path: Display, memory: MemoryUsage, time: Duration) {
+    let compressed_size = memory.compressed_size();
+    let compression_rate = memory.compression_rate().unwrap();
     let styled_compression_rate = {
         let style = style(compression_rate);
         match compression_rate {
@@ -139,16 +139,30 @@ fn print_compression_data(path: Display, memory: (usize, usize), raw_size: u64, 
         }
     };
 
+    let compressed_size_no_ra = memory.compression_rate_without_ra().unwrap();
+    let styled_compression_rate_no_ra = {
+        let style = style(compressed_size_no_ra);
+        match compressed_size_no_ra {
+            c if c > 1.0 => style.red(),
+            c if c < 1.0 => style.green(),
+            _ => style,
+        }
+    };
+
     info!(
-        "Compression rate of `{}`: {:.2} ({} compressed / {} raw), taking {:?}",
+        "Compression rate of `{}`: {:.2} ({:.2}) ({} compressed / {} raw), taking {:?}",
         path,
         styled_compression_rate,
+        styled_compression_rate_no_ra,
         HumanBytes(compressed_size as u64),
-        HumanBytes(raw_size as u64),
+        HumanBytes((memory.raw_size().unwrap()) as u64),
         time
     );
-    trace!("Reference sequence: {}", HumanBytes(ref_data_size as u64));
-    trace!("Data size: {}", HumanBytes(data_size as u64));
+    trace!(
+        "Reference sequence: {}",
+        HumanBytes(memory.reference_size() as u64)
+    );
+    trace!("Data size: {}", HumanBytes(memory.compressed_size() as u64));
 }
 
 fn print_decompression_time(time: Duration) {

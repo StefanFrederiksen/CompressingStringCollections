@@ -16,8 +16,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 mod analysis;
 use analysis::*;
 
-mod memory;
-use memory::*;
+pub mod memory_usage;
+use memory_usage::*;
 
 #[derive(Debug, Clone, Copy)]
 pub struct EncodePart<U> {
@@ -141,8 +141,8 @@ where
         internal_random_access(self, i, x)
     }
 
-    pub fn memory_footprint(&self) -> (usize, usize) {
-        internal_memory_footprint(self)
+    pub fn memory_footprint(&self, total_size: Option<usize>) -> MemoryUsage {
+        internal_memory_footprint(self, total_size)
     }
 
     pub fn uncompressed_size(&self) -> u64 {
@@ -225,8 +225,8 @@ where
         }
 
         let analysis_result = AnalysisResult::new(a_vec);
-        let (d1, d2) = rlz.memory_footprint();
-        let compressed_rate = (d1 + d2) as f64 / total_size as f64;
+        let memory_usage = rlz.memory_footprint(Some(total_size as usize));
+        let compressed_rate = memory_usage.compression_rate().unwrap();
 
         if compressed_rate < best_compression_rate {
             eprintln!(
@@ -446,45 +446,43 @@ where
     data
 }
 
-fn internal_memory_footprint<U: Copy>(encoded: &RelativeLempelZiv<U>) -> (usize, usize) {
-    // "base_data" size
-    let base_data_size = internal_memory_single_list(&encoded.base_data);
+// This function could use the `internal_memory_single_list` function, but doesn't
+// because there's no easy way to split up the part of len and range...
+// So instead this is done a bit manually.
+fn internal_memory_footprint<U: Copy>(
+    encoded: &RelativeLempelZiv<U>,
+    raw_size: Option<usize>,
+) -> MemoryUsage {
+    let factorizations: usize = encoded.data.iter().map(|v| v.capacity()).sum();
 
-    // "data" size (two-dimensional vector)
-    let data_size = internal_memory_double_list(&encoded.data);
+    let size_of_u = mem::size_of::<U>();
+    let size_of_reference = internal_memory_single_list(&encoded.base_data);
+    let factorizations_size = size_of_u * factorizations;
+    let randon_access_size = size_of_u * factorizations;
 
-    // Todo: Debug info
-    // println!("Looking into factorization data sizes...");
-    // println!("Sequences: {}", encoded.data.len());
-    // println!(
-    //     "Size of 1 factorization: {}",
-    //     mem::size_of::<EncodePart<u32>>(),
-    // );
-    // println!(
-    //     "Factorizations: {}",
-    //     encoded.data.iter().map(|v| v.len()).sum::<usize>()
-    // );
-    // println!(
-    //     "Minimum factorization: {}",
-    //     encoded.data.iter().map(|v| v.len()).min().unwrap_or(0)
-    // );
-    // println!(
-    //     "Maximum factorization: {}",
-    //     encoded.data.iter().map(|v| v.len()).max().unwrap_or(0)
-    // );
-
-    // fn mean(list: &[usize]) -> f64 {
-    //     let sum: usize = Iterator::sum(list.iter());
-    //     sum as f64 / (list.len() as f64)
-    // }
-    // println!(
-    //     "Average factorization: {}",
-    //     mean(&encoded.data.iter().map(|v| v.len()).collect::<Vec<_>>())
-    // );
-
-    // Return
-    (base_data_size, data_size)
+    MemoryUsage::new(
+        size_of_reference,
+        factorizations_size,
+        randon_access_size,
+        raw_size,
+    )
 }
+
+// --- Memory consumption functions ---
+// Computes the memory consumption of a slice of strings
+fn internal_memory_string_list<T: AsRef<str>>(v: &[T]) -> u64 {
+    v.iter().fold(0, |acc, s| acc + s.as_ref().len() as u64)
+}
+
+// Computes the memory consumption of a Vector of stack-allocated elements
+fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
+    v.capacity() * mem::size_of::<T>()
+}
+
+// Computes the memory consumption of a Vector of Vectors of stack-allocated elements
+// fn internal_memory_double_list<T: Copy>(vv: &Vec<Vec<T>>) -> usize {
+//     vv.iter().map(|v| internal_memory_single_list(v)).sum()
+// }
 
 fn internal_random_access<U>(rlt: &RelativeLempelZiv<U>, i: U, x: U) -> u8
 where
@@ -518,32 +516,6 @@ where
     let pos = start_usize + (x_usize - len_usize);
     rlt.base_data[pos]
 }
-
-// --- Memory consumption functions ---
-// Computes the memory consumption of a slice of strings
-fn internal_memory_string_list<T: AsRef<str>>(v: &[T]) -> u64 {
-    v.iter().fold(0, |acc, s| acc + s.as_ref().len() as u64)
-}
-
-// Computes the memory consumption of a Vector of stack-allocated elements
-fn internal_memory_single_list<T: Copy>(v: &Vec<T>) -> usize {
-    v.capacity() * mem::size_of::<T>()
-}
-
-// Computes the memory consumption of a Vector of Vectors of stack-allocated elements
-fn internal_memory_double_list<T: Copy>(vv: &Vec<Vec<T>>) -> usize {
-    vv.iter().map(|v| internal_memory_single_list(v)).sum()
-}
-
-// fn total_size_strings<T: AsRef<str>>(strings: &[T]) -> u64 {
-//     internal_memory_string_list(&strings)
-// }
-
-// // Assumes the first element in the tuple is the data string
-// fn total_size_tuples<T: AsRef<str>>(strings: &[(T, T)]) -> u64 {
-//     let f = strings.iter().map(|t| t.0.as_ref()).collect::<Vec<_>>();
-//     internal_memory_string_list(&f)
-// }
 
 #[cfg(test)]
 #[macro_use(quickcheck)]
