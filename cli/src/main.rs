@@ -26,6 +26,12 @@ struct CliInput {
     #[structopt(parse(from_os_str))]
     path: PathBuf,
 
+    /// The reference string strategy. Only valid values are the following, the rest will crash
+    /// 1. A single reference is chosen, either randomly or from the `i` input
+    /// 2. The reference merge strategy, which recursively tries to find a better and better reference string
+    #[structopt(short, long, default_value = "1")]
+    strategy: usize,
+
     /// Flag specifying whether the path is a directory
     #[structopt(short = "d", long)]
     is_dir: bool,
@@ -99,14 +105,20 @@ fn main() -> Result<()> {
         total_size = size;
     }
 
-    let stopwatch = Instant::now();
-    // let (encoded, analysis) = RelativeLempelZiv::<u32>::encode_analysis(&strings, Some(args.i));
     let chars = if args.chars.is_empty() {
         None
     } else {
         Some(args.chars)
     };
-    let encoded = RelativeLempelZiv::<u32>::encode_reference_merge(&strings, chars);
+    let stopwatch = Instant::now();
+    let encoded = match args.strategy {
+        1 => {
+            let s = strings.iter().map(|t| &t.0).collect::<Vec<_>>();
+            RelativeLempelZiv::<u32>::encode(&s, Some(args.i), chars)
+        }
+        2 => RelativeLempelZiv::<u32>::encode_reference_merge(&strings, chars),
+        _ => panic!("Invalid strategy input"),
+    };
     let elapsed_time = stopwatch.elapsed();
 
     let memory_size = encoded.memory_footprint(Some(total_size as usize));
