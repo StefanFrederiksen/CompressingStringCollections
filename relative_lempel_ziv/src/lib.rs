@@ -16,6 +16,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 mod analysis;
 use analysis::*;
 
+mod memory;
+use memory::*;
+
 #[derive(Debug, Clone, Copy)]
 pub struct EncodePart<U> {
     len: U,
@@ -77,10 +80,12 @@ where
     pub fn encode_analysis<T: AsRef<str> + Sync>(
         data: &[(T, T)],
         n: Option<Vec<usize>>,
+        chars: &Option<impl AsRef<str>>,
     ) -> (Self, AnalysisResult) {
         let strings: Vec<&str> = data.iter().map(|t| t.0.as_ref()).collect();
         let names: Vec<&str> = data.iter().map(|t| t.1.as_ref()).collect();
-        let base_string = base_string(&strings, n);
+
+        let base_string = base_string(&strings, n, chars);
         let st = create_suffix_tree(base_string);
         let rlz = encode_parts(&strings, &st);
 
@@ -97,7 +102,11 @@ where
         (rlz, analysis_result)
     }
 
-    pub fn encode<T: AsRef<str> + Sync>(strings: &[T], n: Option<Vec<usize>>) -> Self {
+    pub fn encode<T: AsRef<str> + Sync>(
+        strings: &[T],
+        n: Option<Vec<usize>>,
+        chars: Option<T>,
+    ) -> Self {
         let spinner_style = ProgressStyle::default_spinner()
             .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
             .template("{spinner} {wide_msg}");
@@ -105,7 +114,7 @@ where
         let pb = ProgressBar::new(1);
         pb.set_style(spinner_style);
         pb.set_message("Finding base string...");
-        let base_string = base_string(&strings, n);
+        let base_string = base_string(&strings, n, &chars);
 
         pb.set_message("Creating suffix tree from base string...");
         let st = create_suffix_tree(base_string);
@@ -116,11 +125,11 @@ where
         res
     }
 
-    pub fn encode_reference_merge<T>(strings: &[(T, T)]) -> Self
+    pub fn encode_reference_merge<T>(strings: &[(T, T)], chars: Option<impl AsRef<str>>) -> Self
     where
         T: AsRef<str> + Sync + Eq,
     {
-        encode_by_reference_merge(strings)
+        encode_by_reference_merge(strings, chars)
     }
 
     pub fn decode(&self) -> Vec<String> {
@@ -149,18 +158,28 @@ where
     // }
 }
 
-fn base_string_by_name<T: AsRef<str> + Eq>(strings: &[(T, T)], names: &Vec<String>) -> String {
+fn base_string_by_name<T: AsRef<str> + Eq>(
+    strings: &[(T, T)],
+    names: &Vec<String>,
+    chars: &Option<impl AsRef<str>>,
+) -> String {
     let mut ref_str = strings
         .iter()
         .filter(|(_, n)| names.contains(&String::from(n.as_ref())))
         .map(|(s, _)| s.as_ref())
         .collect::<Vec<_>>()
         .join("");
-    ref_str.push_str("ACGTN");
+
+    if let Some(s) = chars {
+        ref_str.push_str(s.as_ref());
+    }
     ref_str
 }
 
-fn encode_by_reference_merge<U, T>(strings: &[(T, T)]) -> RelativeLempelZiv<U>
+fn encode_by_reference_merge<U, T>(
+    strings: &[(T, T)],
+    chars: Option<impl AsRef<str>>,
+) -> RelativeLempelZiv<U>
 where
     U: Copy + Ord + TryFrom<usize> + TryInto<usize> + Send,
     <U as TryFrom<usize>>::Error: fmt::Debug,
@@ -191,7 +210,7 @@ where
         // system, they will be removed from memory after the
         // scope ends.
         let rlz: RelativeLempelZiv<U> = {
-            let base_string = base_string_by_name(strings, &reference_names);
+            let base_string = base_string_by_name(strings, &reference_names, &chars);
             let st = create_suffix_tree(base_string);
             encode_parts(&raw_strings, &st)
         };
@@ -211,7 +230,7 @@ where
 
         if compressed_rate < best_compression_rate {
             eprintln!(
-                "{} < {} in the {}th iteration.",
+                "{} < {} in the {} iteration.",
                 compressed_rate, best_compression_rate, i
             );
             best_compression_rate = compressed_rate;
@@ -221,6 +240,10 @@ where
 
             best_rlz = Some(rlz);
         } else {
+            eprintln!(
+                "{} > {} in the {} iteration.",
+                compressed_rate, best_compression_rate, i
+            );
             eprintln!(
                 "Returning best rate {} with the following strings: {:#?}",
                 best_compression_rate, reference_names
@@ -241,7 +264,11 @@ where
 // Todo: Find ways to improve the base string finding
 // Todo: Change this to bytes, since that simplifies
 // the amount of chars needed.
-fn base_string<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> String {
+fn base_string<T: AsRef<str>>(
+    strings: &[T],
+    n: Option<Vec<usize>>,
+    chars: &Option<impl AsRef<str>>,
+) -> String {
     // Select suitable base string
     let base_string = n
         .unwrap_or(vec![0])
@@ -253,8 +280,13 @@ fn base_string<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> String {
     // For now assume that reference string contains all chars
     // If this breaks, just ensure ACGTN are there...
     let mut s = String::from(base_string);
-    s.push_str("ACGTN");
-    return s;
+
+    // Either appends the characters given from the chars input
+    // or reads through the entire string to ensure that every char is present.
+    if let Some(append) = chars {
+        s.push_str(&append.as_ref().to_ascii_uppercase());
+        return s;
+    }
 
     // Create hash of all current characters
     let mut found_chars = HashSet::new();
@@ -265,7 +297,7 @@ fn base_string<T: AsRef<str>>(strings: &[T], n: Option<Vec<usize>>) -> String {
     // Iterate through all strings to ensure all characters are covered
     let mut chars_to_add = Vec::new();
     for string in strings {
-        for c in string.as_ref().chars() {
+        for c in string.as_ref().to_ascii_uppercase().chars() {
             if !found_chars.contains(&c) {
                 chars_to_add.push(c);
                 found_chars.insert(c);
@@ -527,7 +559,7 @@ mod tests {
     fn basic() {
         let test_data = vec!["banana", "anaban", "aaa", "nananananabananana"];
         println!("Original: {:?}", test_data);
-        let encoded = RelativeLempelZiv::<u8>::encode(&test_data, None);
+        let encoded = RelativeLempelZiv::<u8>::encode(&test_data, None, None);
         println!("Encoded: {:?}", encoded);
 
         let decoded = encoded.decode();
@@ -537,7 +569,7 @@ mod tests {
     #[test]
     fn random_access() {
         let test_data = vec!["banana", "ananan", "nananananananv"];
-        let encoded = RelativeLempelZiv::<u8>::encode(&test_data, None);
+        let encoded = RelativeLempelZiv::<u8>::encode(&test_data, None, None);
 
         assert_eq!(b"a"[0], encoded.random_access(1, 0));
         assert_eq!(b"v"[0], encoded.random_access(2, 13));
@@ -556,7 +588,7 @@ mod tests {
             return TestResult::discard();
         }
 
-        let res = xs == RelativeLempelZiv::<u32>::encode(&xs, None).decode();
+        let res = xs == RelativeLempelZiv::<u32>::encode(&xs, None, None).decode();
         TestResult::from_bool(res)
     }
 
@@ -576,9 +608,25 @@ mod tests {
         }
 
         let xth = rng.gen_range(0, xs[index].len());
-        let encoded = RelativeLempelZiv::<usize>::encode(&xs, None);
+        let encoded = RelativeLempelZiv::<usize>::encode(&xs, None, None);
 
         let res = xs[index].as_bytes()[xth] == encoded.random_access(index, xth);
+        TestResult::from_bool(res)
+    }
+
+    #[quickcheck]
+    fn quickcheck_analysis_encode_decode(xs: Vec<(String, String)>) -> TestResult {
+        // No point in encoding an empty list, so we discard those
+        // test inputs
+        if xs.len() == 0 || xs.iter().any(|(s, _)| s.is_empty()) {
+            return TestResult::discard();
+        }
+
+        let lhs = xs.iter().map(|v| String::from(&v.0)).collect::<Vec<_>>();
+
+        let chars: Option<&str> = None; // Type hack
+        let (encoded, _) = RelativeLempelZiv::<u32>::encode_analysis(&xs, None, &chars);
+        let res = lhs == encoded.decode();
         TestResult::from_bool(res)
     }
 

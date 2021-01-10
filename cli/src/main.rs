@@ -34,8 +34,12 @@ struct CliInput {
     _output: Option<PathBuf>,
 
     /// If you want to manually tell the cli which reference strings to take
-    #[structopt(short = "i", default_value = "106")]
+    #[structopt(short = "i", default_value = "0")]
     i: Vec<usize>,
+
+    /// The characters that the reference string must include, is appended at the end of the reference string to ensure all chars are present.
+    #[structopt(short, long)]
+    chars: String,
 }
 
 // Example input: "../test_data/dna.50MB"
@@ -96,7 +100,12 @@ fn main() -> Result<()> {
 
     let stopwatch = Instant::now();
     // let (encoded, analysis) = RelativeLempelZiv::<u32>::encode_analysis(&strings, Some(args.i));
-    let encoded = RelativeLempelZiv::<u32>::encode_reference_merge(&strings);
+    let chars = if args.chars.is_empty() {
+        None
+    } else {
+        Some(args.chars)
+    };
+    let encoded = RelativeLempelZiv::<u32>::encode_reference_merge(&strings, chars);
     let elapsed_time = stopwatch.elapsed();
 
     let memory_size = encoded.memory_footprint();
