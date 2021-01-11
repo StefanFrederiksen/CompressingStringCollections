@@ -174,7 +174,10 @@ fn print_compression_data(path: Display, memory: MemoryUsage, time: Duration) {
         "Reference sequence: {}",
         HumanBytes(memory.reference_size() as u64)
     );
-    trace!("Data size: {}", HumanBytes(memory.compressed_size() as u64));
+    trace!(
+        "Factorization size: {}",
+        HumanBytes(memory.factorizations_size() as u64)
+    );
 }
 
 fn print_decompression_time(time: Duration) {
